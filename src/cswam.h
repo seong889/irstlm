@@ -62,7 +62,7 @@ class cswam {
     int srcBoD;        //code of segment begin in src dict
     int srcEoD;        //code of segment end in src dict
 
-    float ****A;       //expected counts
+    float ****A;       //expected counts    
     float **Den;       //alignment probs
     float *localLL;    //local log-likelihood
     int **alignments;  //word alignment info
@@ -86,8 +86,8 @@ public:
     int saveModelTxt(char* fname);
     int loadModel(char* fname,bool expand=false);
     
-    void initAlpha();
-    void freeAlpha();
+    void initAlphaDen();
+    void freeAlphaDen();
     
     float LogGauss(const int dim,const float* x,const float *m, const float *s);
         
