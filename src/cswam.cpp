@@ -26,6 +26,7 @@
 #include <sstream>
 #include <pthread.h>
 #include "thpool.h"
+#include "crc.h"
 #include "mfstream.h"
 #include "mempool.h"
 #include "htable.h"
@@ -43,7 +44,7 @@ using namespace std;
 
 #define MY_RAND (((float)random()/RAND_MAX)* 2.0 - 1.0)
 	
-cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,bool usenull, bool normvect,bool scalevect,bool trainvar){
+cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,bool usenull, bool normvect,bool scalevect,bool trainvar,bool verbose){
     
     //create dictionaries
     srcdict=new dictionary(NULL,100000); srcdict->generate(sdfile,true);
@@ -81,6 +82,7 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,bool usenull, bool normvec
     srandom(100); //ensure repicable generation of random numbers
     bucket=BUCKET;
     threads=1;
+    verbosity=verbose;
 }
 
 cswam::~cswam() {
@@ -112,16 +114,28 @@ cswam::~cswam() {
     
 }
 
+void randword2vec(const char* word,float* vec,int dim){
+    
+    //initialize random generator
+    srandom(crc16_ccitt(word,strlen(word)));
+    
+    //generate random numbers between -2 and +2
+    for (int d=0;d<dim;d++)
+        vec[d]=(((float)random()/RAND_MAX)* 4.0 - 2.0);
+    
+}
 
 
 void cswam::loadword2vec(char* fname){
     
-    cerr << "Loading word2vec file " << fname << " ...\n";
+    cerr << "Loading word2vec file " << fname;
     mfstream inp(fname,ios::in);
     
     long long w2vsize;
-    inp >> w2vsize; cout << w2vsize << "\n";
-    inp >> D ; cout << D  << "\n";
+    inp >> w2vsize; cerr << " size= " << w2vsize;
+    inp >> D ; cout << " dim= " << D  << "\n";
+    
+    assert(D>0 && D<1000);
     
     int srcoov=srcdict->oovcode();
     
@@ -140,20 +154,29 @@ void cswam::loadword2vec(char* fname){
         else //skip this word
             for (int d=0;d<D;d++) inp >> dummy;
         
-        if (!(i % 100000)) cerr<< word << " ";
+        if (!(i % 10000)) cerr<< ".";
     }
+    cerr << "\n";
     
     //looking for missing source words in w2v
+    int newwords=0;
     for ( f=0;f<srcdict->size();f++){
         if (W2V[f]==NULL && f!=srcBoD && f!=srcEoD) {
-            cerr << "Missing src word in w2v: " << srcdict->decode(f) << "\n";
+            if (verbosity)
+                cerr << "Missing src word in w2v: " << srcdict->decode(f) << "\n";
             W2V[f]=new float[D];
-            for (int d=0;d<D;d++) W2V[f][d]=9;  //for now this is the OOV vector: something better needed here
+        
+            randword2vec(srcdict->decode(f),W2V[f],D);
+        
+            newwords++;
+            
+            if (verbosity){
+                for (int d=0;d<D;d++) cerr << " " << W2V[f][d]; cerr << "\n";
+            }
         }
     }
-    
-    
-    cerr << "\n";
+
+    cerr << "Generated " << newwords << " missing vectors\n";
     
     
     if (normalize_vectors || scale_vectors){
@@ -190,7 +213,6 @@ void cswam::loadword2vec(char* fname){
         }
     }
     
-    cerr << " ... done\n";
 };
 
 
@@ -201,7 +223,9 @@ void cswam::initModel(char* modelfile){
     FILE* f;if ((f=fopen(modelfile,"r"))!=NULL){fclose(f);model_available=true;}
     
     if (model_available) loadModel(modelfile,true); //we are in training mode!
-    else{ //initialize model
+    else{
+        cerr << "Initialize model\n";
+
         TM=new TransModel[trgdict->size()];
     
         for (int e=0; e<trgdict->size(); e++){
@@ -216,10 +240,11 @@ void cswam::initModel(char* modelfile){
             
             //initialize with w2v value if the same word is also in src
             int f=srcdict->encode(trgdict->decode(e));
-            if (f!=srcdict->oovcode() && f!=srcBoD && f!=srcEoD){
+            float srcfreq=srcdict->freq(f);float trgfreq=trgdict->freq(e);
+            if (f!=srcdict->oovcode() && srcfreq/trgfreq < 1.1 && srcfreq/trgfreq > 0.9 &&  f!=srcBoD && f!=srcEoD){
                 memcpy(TM[e].G[0].M,W2V[f],sizeof(float) * D);
-                for (int d=0;d<D;d++) TM[e].G[0].S[d]=SSEED/4;
-                cout << "initialize: " << srcdict->decode(f) << "\n";
+                for (int d=0;d<D;d++) TM[e].G[0].S[d]=SSEED/4; //dangerous!!!!
+                if (verbosity)  cerr << "Biasing verbatim translation of " << srcdict->decode(f) << "\n";
             }else
                 for (int d=0;d<D;d++){
                     TM[e].G[0].M[d]=0.0; //pick mean zero
@@ -275,7 +300,7 @@ int cswam::loadModel(char* fname,bool expand){
     else
         D=r;
 
-    cerr << "\nLoading dictionary ... ";
+    if (verbosity) cerr << "\nLoading dictionary ... ";
     dictionary* dict=new dictionary(NULL,1000000);
     dict->load(inp);
     dict->encode(dict->OOV());
@@ -283,7 +308,8 @@ int cswam::loadModel(char* fname,bool expand){
     
     //expand the model for training or keep the model fixed for testing
     if (expand){
-        cerr << "\nExpanding model to include targer dictionary";
+        if (verbosity)
+            cerr << "\nExpanding model to include targer dictionary";
         dict->incflag(1);
         for (int code=0;code<trgdict->size();code++)
             dict->encode(trgdict->decode(code));
@@ -294,7 +320,7 @@ int cswam::loadModel(char* fname,bool expand){
     
     TM=new TransModel [trgdict->size()];
     
-    cerr << "\nReading parameters .... ";
+    if (verbosity) cerr << "\nReading parameters .... ";
     for (int e=0; e<current_size; e++){
         inp.read((char *)&TM[e].n,sizeof(int));
         TM[e].W=new float[TM[e].n];
@@ -312,13 +338,27 @@ int cswam::loadModel(char* fname,bool expand){
     
     cerr << "\nInitializing " << trgdict->size()-current_size << " new entries .... ";
     for (int e=current_size; e<trgdict->size(); e++){
-        TM[e].n=1;
-        TM[e].W=new float[1];TM[e].W[0]=1.0;
-        TM[e].G=new Gaussian[1];
+        TM[e].n=1;TM[e].G=new Gaussian [1];TM[e].W=new float[1];
         TM[e].G[0].M=new float [D];
         TM[e].G[0].S=new float [D];
-        TM[e].G[0].eC=0;TM[e].G[0].mS=0;
-        for (int d=0;d<D;d++){TM[e].G[0].M[d]=0.0;TM[e].G[0].S[d]=SSEED;}
+        
+        TM[e].G[0].eC=0;
+        TM[e].G[0].mS=0;
+        
+        TM[e].W[0]=1;
+        
+        //initialize with w2v value if the same word is also in src
+        int f=srcdict->encode(trgdict->decode(e));
+        float srcfreq=srcdict->freq(f);float trgfreq=trgdict->freq(e);
+        if (f!=srcdict->oovcode() && srcfreq/trgfreq < 1.1 && srcfreq/trgfreq > 0.9 &&  f!=srcBoD && f!=srcEoD){
+            memcpy(TM[e].G[0].M,W2V[f],sizeof(float) * D);
+            for (int d=0;d<D;d++) TM[e].G[0].S[d]=SSEED/4; //dangerous!!!!
+            if (verbosity)  cerr << "Biasing verbatim translation of " << srcdict->decode(f) << "\n";
+        }else
+            for (int d=0;d<D;d++){
+                TM[e].G[0].M[d]=0.0; //pick mean zero
+                TM[e].G[0].S[d]=SSEED; //take a wide standard deviation
+            }
     }
     
     cerr << "\nDone\n";
@@ -483,6 +523,10 @@ void cswam::expected_counts(void *argv){
     }
 }
 
+
+
+
+
 void cswam::maximization(void *argv){
     
     long long d=(long long) argv;
@@ -540,7 +584,9 @@ void cswam::expansion(void *argv){
         if ( (S/TM[e].G[n].mS >= 0.95) &&                  //mean variance does not reduce
              ((TM[e].G[n].eC >= eCThresh &&  S> 0.1 )  ||  //population is large
                (S > SThresh && TM[e].G[n].eC >=  5))) {    //variance is large
-            cerr << "\n" << trgdict->decode(e) << " n= " << n << " (" << TM[e].n << ") Counts: " << TM[e].G[n].eC  << " mS: " << S << "\n";
+            if (verbosity)
+                cerr << "\n" << trgdict->decode(e) << " n= " << n << " (" << TM[e].n << ") Counts: "
+                << TM[e].G[n].eC  << " mS: " << S << "\n";
 
                  //expand: create new Gaussian after Gaussian n
             Gaussian *nG=new Gaussian[TM[e].n+1];
@@ -615,7 +661,7 @@ void cswam::contraction(void *argv){
         //remove insignificant and overlapping gaussians
         if (TM[e].W[n] < 0.0001 || max_rel_dist<0.01) { //eliminate this component
             assert(TM[e].n>1);
-            cerr << "\n" << trgdict->decode(e) << " n= " << n << " Weight: " << TM[e].W[n] <<  " RelDist= " << max_rel_dist << "\n";
+            if (verbosity) cerr << "\n" << trgdict->decode(e) << " n= " << n << " Weight: " << TM[e].W[n] <<  " RelDist= " << max_rel_dist << "\n";
             //expand: create new Gaussian after Gaussian n
             Gaussian *nG=new Gaussian[TM[e].n-1];
             float    *nW=new float[TM[e].n-1];
@@ -727,7 +773,8 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
             if (e!=trgEoD)
                 for (int n=0;n<TM[e].n;n++)
                     if (!Den[e][n]){
-                        cerr << "\nRisk of degenerate model. Word: " << trgdict->decode(e) << " n: " << n << " eC:" << TM[e].G[n].eC << "\n";
+                        if (verbosity)
+                            cerr << "\nRisk of degenerate model. Word: " << trgdict->decode(e) << " n: " << n << " eC:" << TM[e].G[n].eC << "\n";
                         for (int d=0;d<D;d++) TM[e].G[n].S[d]=SSEED;
                     }
     
@@ -774,10 +821,10 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
         }
         
        
-        if (srcdata->numdoc()> 10) system("date");
+        if (verbosity) system("date");
         
         saveModel(modelfile);
-        saveModelTxt("modelfile.txt");
+
     }
     
    // for (int e=0;e<trgdict->size();e++)
@@ -812,14 +859,17 @@ void cswam::aligner(void *argv){
     
     //Viterbi alignment: find the most probable alignment for source
     float score; float best_score;int best_i;float sum;
+
+    bool some_not_null=false; int first_target=0;
     
     for (int j=0;j<srclen;j++){
         //cout << "src: " << srcdict->decode(srcdata->docword(s,j)) << "\n";
         
         best_score=-maxfloat;best_i=0;
         
-        for (int i=0;i<trglen;i++){
+        for (int i=first_target;i<trglen;i++){
             //cout << "tgt: " << trgdict->decode(trgdata->docword(s,i)) << " ";
+            
             for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
                 score=LogGauss(D,
                                W2V[srcdata->docword(s,j)],
@@ -827,6 +877,7 @@ void cswam::aligner(void *argv){
                                TM[trgdata->docword(s,i)].G[n].S)+log(TM[trgdata->docword(s,i)].W[n]);
                 if (n==0) sum=score;
                 else sum=logsum(sum,score);
+                if (i>0) sum-=(i > j? log(i-j):log((j-i)+2));
             }
             //cout << "score: " << sum << "\n";
             //  cout << "\t " << srcdict->decode(srcdata->docword(s,j)) << "  " << dist << "\n";
@@ -834,15 +885,21 @@ void cswam::aligner(void *argv){
             if (sum > best_score){
                 best_score=sum;
                 best_i=i;
+                if ((!use_null_word || best_i>0) && !some_not_null) some_not_null=true;
             }
         }
         //cout << "best_i: " << best_i << "\n";
         
         alignments[s % bucket][j]=best_i;
+        
+        if (j==(srclen-1) && !some_not_null){
+            j=-1; //restart loop and remove null word from options
+            first_target=1;
+            some_not_null=true; //make sure to pass this check next time
+        }
     }
+    
 }
-
-
 
 
 int cswam::test(char *srctestfile, char *trgtestfile, char* modelfile, char* alignfile,int threads){
@@ -886,8 +943,14 @@ int cswam::test(char *srctestfile, char *trgtestfile, char* modelfile, char* ali
                 mfstream out(alignfile,ios::out | ios::app);
                 
                 for (int b=0;b<bucket;b++){ //includes the eof case of
-                    out << "Sentence: " << s-bucket+1+b;
-                    for (int j=0; j<srcdata->doclen(s-bucket+1+b); j++) out << " "  << j << "-" << alignments[b][j];
+                    //out << "Sentence: " << s-bucket+1+b;
+                    bool first=true;
+                    for (int j=0; j<srcdata->doclen(s-bucket+1+b); j++)
+                        if (!use_null_word || alignments[b][j]>0){
+                            //print target using 0 for first actual word
+                            out << (first?"":" ") << j << "-" << alignments[b][j]-(use_null_word?1:0);
+                            first=false;
+                        }
                     out << "\n";
                 }
         }

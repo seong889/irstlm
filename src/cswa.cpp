@@ -38,8 +38,16 @@ using namespace std;
 void print_help(int TypeFlag=0){
     std::cerr << std::endl << "cswa -  continuous space word alignment model" << std::endl;
     std::cerr << std::endl << "USAGE:"  << std::endl;
-    std::cerr << "       cswa -str=<text> -ttr=<text> -w2v=word2vectmodel -o=model-file [options]" << std::endl;
-     std::cerr << std::endl;
+    std::cerr << "       Training mode:" << std::endl;
+    std::cerr << "       cswa -sd=<src-data> -td=<trg-data> -w2v=<word2vec> -m=<model> -it=<iterations> -th=<threads> [options]" << std::endl;
+    std::cerr << "       Alignment mode:" << std::endl;
+    std::cerr << "       cswa -sd=<src-data> -td=<trg-data> -w2v=<word2vec> -m=<model> -al=<alignment-file> -th=<threads> [options]" << std::endl;
+    std::cerr << "       Data format:" << std::endl;
+    std::cerr << "       <src-data> and <trg-data>  must have an header with the number of following lines. " << std::endl;
+    std::cerr << "       Each text line must be sourrounded by the symbols <d> and </d>. " << std::endl;
+    std::cerr << "       Hint: (echo `wc -l < yourfile`; add-start-end.sh -s \"d\" < yourfile) > yourfile.doc " << std::endl;
+    
+    std::cerr << std::endl;
 }
 
 void usage(const char *msg = 0)
@@ -59,6 +67,7 @@ int main(int argc, char **argv){
     
     char *w2vfile=NULL;
     char *modelfile=NULL;
+    char *modeltxtfile=NULL;
     char *alignfile=NULL;
 
     bool forcemodel=false;
@@ -71,6 +80,7 @@ int main(int argc, char **argv){
     bool normvectors=false;
     bool scalevectors=false;
     bool usenullword=true;
+    bool verbosity=false;
     
     DeclareParams((char*)
                   
@@ -111,6 +121,14 @@ int main(int argc, char **argv){
                   "ScaleVectors", CMDBOOLTYPE|CMDMSG, &scalevectors, "<bool>: scale vectors  (default false)",
                   "sv", CMDBOOLTYPE|CMDMSG, &scalevectors, "<bool>: scale vectors  (default false)",
                   
+                  "TxtModel", CMDSTRINGTYPE|CMDMSG, &modeltxtfile, "<fname> : model in textual form",
+                  "txt", CMDSTRINGTYPE|CMDMSG, &modeltxtfile, "<fname> : model in readable form",
+
+                  
+                  "Verbosity", CMDBOOLTYPE|CMDMSG, &verbosity, "verbose output",
+                  "v", CMDBOOLTYPE|CMDMSG, &verbosity, "verbose output",
+                  
+                  
                   "Help", CMDBOOLTYPE|CMDMSG, &help, "print this help",
                   "h", CMDBOOLTYPE|CMDMSG, &help, "print this help",
                   
@@ -142,13 +160,15 @@ int main(int argc, char **argv){
     if (iterations && testmodel && !forcemodel)
           exit_error(IRSTLM_ERROR_DATA,"Use -ForceModel=y option to update an existing model.");
     
-    cswam *model=new cswam(srcdatafile,trgdatafile,w2vfile,usenullword,normvectors,scalevectors,trainvar);
+    cswam *model=new cswam(srcdatafile,trgdatafile,w2vfile,usenullword,normvectors,scalevectors,trainvar,verbosity);
     
     if (iterations)
         model->train(srcdatafile,trgdatafile,modelfile,iterations,threads);
     
     if (alignfile)
         model->test(srcdatafile,trgdatafile,modelfile,alignfile,threads);
+    
+    if (modeltxtfile)  model->saveModelTxt(modeltxtfile);
     
     delete model;
     
