@@ -55,7 +55,8 @@ class cswam {
     bool scale_vectors;
     bool train_variances;
     bool use_null_word;
-
+    bool verbosity;
+    
     //private info shared among threads
     int trgBoD;        //code of segment begin in target dict
     int trgEoD;        //code of segment end in target dict
@@ -77,7 +78,7 @@ class cswam {
     
 public:
     
-    cswam(char* srcdatafile,char* trgdatafile, char* word2vecfile,bool usenull,bool normv2w,bool scalew2v,bool trainvar);
+    cswam(char* srcdatafile,char* trgdatafile, char* word2vecfile,bool usenull,bool normv2w,bool scalew2v,bool trainvar,bool verbose);
     ~cswam();
     
     void loadword2vec(char* fname);
