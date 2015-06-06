@@ -80,7 +80,12 @@ int main(int argc, char **argv){
     bool normvectors=false;
     bool scalevectors=false;
     bool usenullword=true;
+    double fixnullprob=0;
     bool verbosity=false;
+    double minvar=0.1;
+    bool distmean=false;
+    bool distvar=false;
+    bool distbeta=false;
     
     DeclareParams((char*)
                   
@@ -115,8 +120,23 @@ int main(int argc, char **argv){
                   "TrainVariances", CMDBOOLTYPE|CMDMSG, &trainvar, "<bool>: train variances (default true)",
                   "tv", CMDBOOLTYPE|CMDMSG, &trainvar, "<bool>: train variances (default true)",
                 
+                  "FixNullProb", CMDDOUBLETYPE|CMDMSG, &fixnullprob, "<value>: fix null probability (default estimate)",
+                  "fnp", CMDDOUBLETYPE|CMDMSG, &fixnullprob, "<value>: fix null probability (default estimate)",
+                  
+                  "MinVariance", CMDDOUBLETYPE|CMDMSG, &minvar, "<value>: minimum variance (default 0.01)",
+                  "mv", CMDDOUBLETYPE|CMDMSG, &minvar, "<value>: minimum variance (default 0.01)",
+                
                   "NormalizeVectors", CMDBOOLTYPE|CMDMSG, &normvectors, "<bool>: normalize vectors  (default false)",
                   "nv", CMDBOOLTYPE|CMDMSG, &normvectors, "<bool>: normalize vectors  (default false)",
+                  
+                  "DistVar", CMDBOOLTYPE|CMDMSG, &distvar, "<bool>: use distortion variance (default false)",
+                  "dv", CMDBOOLTYPE|CMDMSG, &distvar, "<bool>: use distortion variance (default false)",
+
+                  "DistMean", CMDBOOLTYPE|CMDMSG, &distmean, "<bool>: use distortion mean (default false)",
+                  "dm", CMDBOOLTYPE|CMDMSG, &distmean, "<bool>: use distortion mean (default false)",
+                  
+                  "DistBeta", CMDBOOLTYPE|CMDMSG, &distbeta, "<bool>: use beta distribution for distortion (default true)",
+                  "db", CMDBOOLTYPE|CMDMSG, &distbeta, "<bool>: use beta distribution for distortion (default true)",
                   
                   "ScaleVectors", CMDBOOLTYPE|CMDMSG, &scalevectors, "<bool>: scale vectors  (default false)",
                   "sv", CMDBOOLTYPE|CMDMSG, &scalevectors, "<bool>: scale vectors  (default false)",
@@ -160,7 +180,12 @@ int main(int argc, char **argv){
     if (iterations && testmodel && !forcemodel)
           exit_error(IRSTLM_ERROR_DATA,"Use -ForceModel=y option to update an existing model.");
     
-    cswam *model=new cswam(srcdatafile,trgdatafile,w2vfile,usenullword,normvectors,scalevectors,trainvar,verbosity);
+    cswam *model=new cswam(srcdatafile,trgdatafile,w2vfile,
+                           usenullword,fixnullprob,
+                           normvectors,scalevectors,
+                           trainvar,minvar,
+                           distbeta, distmean,distvar,
+                           verbosity);
     
     if (iterations)
         model->train(srcdatafile,trgdatafile,modelfile,iterations,threads);
@@ -168,7 +193,10 @@ int main(int argc, char **argv){
     if (alignfile)
         model->test(srcdatafile,trgdatafile,modelfile,alignfile,threads);
     
-    if (modeltxtfile)  model->saveModelTxt(modeltxtfile);
+    if (modeltxtfile){
+        model->loadModel(modelfile);
+        model->saveModelTxt(modeltxtfile);        
+    }
     
     delete model;
     

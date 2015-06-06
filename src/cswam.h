@@ -48,15 +48,22 @@ class cswam {
     
     //model
     TransModel *TM;
-    
+    float DistMean,DistVar; //distortion mean and variance
+    float DistA,DistB;      //gamma parameters
+    float NullProb; //null probability
     
     //settings
     bool normalize_vectors;
     bool scale_vectors;
     bool train_variances;
+    double fix_null_prob;
     bool use_null_word;
     bool verbosity;
-    
+    float min_variance;
+    bool distortion_mean;
+    bool distortion_var;
+    bool use_beta_distortion;
+
     //private info shared among threads
     int trgBoD;        //code of segment begin in target dict
     int trgEoD;        //code of segment end in target dict
@@ -78,7 +85,13 @@ class cswam {
     
 public:
     
-    cswam(char* srcdatafile,char* trgdatafile, char* word2vecfile,bool usenull,bool normv2w,bool scalew2v,bool trainvar,bool verbose);
+    cswam(char* srcdatafile,char* trgdatafile, char* word2vecfile,
+          bool usenull,double fix_null_prob,
+          bool normv2w, bool scalew2v,
+          bool trainvar,float minvar,
+          bool distbeta, bool distmean,bool distvar,
+          bool verbose);
+    
     ~cswam();
     
     void loadword2vec(char* fname);
@@ -90,8 +103,15 @@ public:
     void initAlphaDen();
     void freeAlphaDen();
     
+    
     float LogGauss(const int dim,const float* x,const float *m, const float *s);
-        
+
+    float LogDistortion(float d);
+    float LogBeta(float x,  float a,  float b);
+    void EstimateBeta(float &a, float &b,  float m,  float s);
+
+    float Delta( int i, int j, int l=1, int m=1);
+    
     void expected_counts(void *argv);
     static void *expected_counts_helper(void *argv){
         task t=*(task *)argv;
