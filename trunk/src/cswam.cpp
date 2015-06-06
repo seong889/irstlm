@@ -38,13 +38,51 @@
 #include "cswam.h"
 
 #define BUCKET 1000
-#define SSEED 2.0
+#define SSEED 1000
 
 using namespace std;
 
 #define MY_RAND (((float)random()/RAND_MAX)* 2.0 - 1.0)
 	
-cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,bool usenull, bool normvect,bool scalevect,bool trainvar,bool verbose){
+cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
+             bool usenull,double fixnullprob,
+             bool normvect,bool scalevect,
+             bool trainvar,float minvar,
+             bool distbeta,bool distmean,bool distvar,
+             bool verbose){
+    
+    //actual model structure
+    
+    TM=NULL;
+    A=NULL;
+    Den=NULL;
+    
+    //setting
+    normalize_vectors=normvect;
+    scale_vectors=scalevect;
+    train_variances=trainvar;
+    use_null_word=usenull;
+    min_variance=minvar;
+    distortion_mean=distmean;
+    distortion_var=distvar;
+    use_beta_distortion=distbeta;
+    fix_null_prob=fixnullprob;
+    DistMean=DistVar=0;  //distortion mean and variance
+    DistA=DistB=0;    //beta parameters
+    NullProb=0;
+    
+    
+    cout << "cswam configuration.\n";
+    cout << "Vectors:  normalize [" << normalize_vectors << "]  scale [" << scale_vectors << "]\n";
+    cout << "Gaussian Variances: train [" << train_variances << "] min [" << min_variance << "] initial [" << min_variance * SSEED << "]\n";
+    cout << "Null word: active [" << use_null_word << "] fix_null_prob [" << fix_null_prob << "]\n";
+    cout << "Distortion model: use beta [" << use_beta_distortion << "] update mean [" << distortion_mean << "] update variance [" << distortion_var << "]\n";
+    
+    
+    srandom(100); //ensure repicable generation of random numbers
+    bucket=BUCKET;
+    threads=1;
+    verbosity=verbose;
     
     //create dictionaries
     srcdict=new dictionary(NULL,100000); srcdict->generate(sdfile,true);
@@ -67,22 +105,7 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,bool usenull, bool normvec
 
     //check consistency of word2vec with target vocabulary
     
-    //actual model structure
     
-    TM=NULL;
-    
-    A=NULL;
-    Den=NULL;
-    
-    normalize_vectors=normvect;
-    scale_vectors=scalevect;
-    train_variances=trainvar;
-    use_null_word=usenull;
-    
-    srandom(100); //ensure repicable generation of random numbers
-    bucket=BUCKET;
-    threads=1;
-    verbosity=verbose;
 }
 
 cswam::~cswam() {
@@ -225,7 +248,17 @@ void cswam::initModel(char* modelfile){
     if (model_available) loadModel(modelfile,true); //we are in training mode!
     else{
         cerr << "Initialize model\n";
-
+        
+        if (use_beta_distortion){
+            DistMean=0.5;DistVar=1.0/12.0; //uniform distribution on 0,1
+            EstimateBeta(DistA,DistB,DistMean,DistVar);
+        }else{
+            DistMean=0;DistVar=10; //gaussian distribution over -1,+1: almost uniform
+        }
+        
+        if (use_null_word)
+            NullProb=(fix_null_prob?fix_null_prob:0.05); //null word alignment probability
+        
         TM=new TransModel[trgdict->size()];
     
         for (int e=0; e<trgdict->size(); e++){
@@ -241,14 +274,14 @@ void cswam::initModel(char* modelfile){
             //initialize with w2v value if the same word is also in src
             int f=srcdict->encode(trgdict->decode(e));
             float srcfreq=srcdict->freq(f);float trgfreq=trgdict->freq(e);
-            if (f!=srcdict->oovcode() && srcfreq/trgfreq < 1.1 && srcfreq/trgfreq > 0.9 &&  f!=srcBoD && f!=srcEoD){
+            if (f!=srcdict->oovcode() && srcfreq/trgfreq < 1.1 && srcfreq/trgfreq > 0.9 && srcfreq < 10 &&  f!=srcBoD && f!=srcEoD){
                 memcpy(TM[e].G[0].M,W2V[f],sizeof(float) * D);
-                for (int d=0;d<D;d++) TM[e].G[0].S[d]=SSEED/4; //dangerous!!!!
+                for (int d=0;d<D;d++) TM[e].G[0].S[d]=min_variance; //dangerous!!!!
                 if (verbosity)  cerr << "Biasing verbatim translation of " << srcdict->decode(f) << "\n";
             }else
                 for (int d=0;d<D;d++){
                     TM[e].G[0].M[d]=0.0; //pick mean zero
-                    TM[e].G[0].S[d]=SSEED; //take a wide standard deviation
+                    TM[e].G[0].S[d]=SSEED * min_variance; //take a wide standard deviation
                 }
         }
     }
@@ -257,6 +290,8 @@ void cswam::initModel(char* modelfile){
 int cswam::saveModelTxt(char* fname){
     cerr << "Writing model into: " << fname << "\n";
     mfstream out(fname,ios::out);
+    out << "=dist= " << DistMean << " " << DistVar << "\n";
+    out << "=nullprob= " << NullProb << "\n";
     for (int e=0; e<trgdict->size(); e++){
         out << "=h= " << trgdict->decode(e) << " sz= " << TM[e].n <<  "\n";
         for (int n=0;n<TM[e].n;n++){
@@ -273,6 +308,9 @@ int cswam::saveModel(char* fname){
     mfstream out(fname,ios::out);
     out << "CSWAM " << D << "\n";
     trgdict->save(out);
+    out.write((const char*)&DistMean,sizeof(float));
+    out.write((const char*)&DistVar,sizeof(float));
+    out.write((const char*)&NullProb,sizeof(float));
     for (int e=0; e<trgdict->size(); e++){
         out.write((const char*)&TM[e].n,sizeof(int));
         out.write((const char*)TM[e].W,TM[e].n * sizeof(float));
@@ -321,6 +359,13 @@ int cswam::loadModel(char* fname,bool expand){
     TM=new TransModel [trgdict->size()];
     
     if (verbosity) cerr << "\nReading parameters .... ";
+    inp.read((char*)&DistMean, sizeof(float));
+    inp.read((char*)&DistVar, sizeof(float));
+    inp.read((char*)&NullProb,sizeof(float));
+    
+    if (use_beta_distortion)
+        EstimateBeta(DistA,DistB,DistMean,DistVar);
+    
     for (int e=0; e<current_size; e++){
         inp.read((char *)&TM[e].n,sizeof(int));
         TM[e].W=new float[TM[e].n];
@@ -347,17 +392,17 @@ int cswam::loadModel(char* fname,bool expand){
         
         TM[e].W[0]=1;
         
-        //initialize with w2v value if the same word is also in src
+        //initialize with w2v value if the same word is also in src, similar frequency, not too frequent
         int f=srcdict->encode(trgdict->decode(e));
         float srcfreq=srcdict->freq(f);float trgfreq=trgdict->freq(e);
-        if (f!=srcdict->oovcode() && srcfreq/trgfreq < 1.1 && srcfreq/trgfreq > 0.9 &&  f!=srcBoD && f!=srcEoD){
+        if (f!=srcdict->oovcode() && srcfreq/trgfreq < 1.1 && srcfreq/trgfreq > 0.9 && srcfreq < 10 && f!=srcBoD && f!=srcEoD){
             memcpy(TM[e].G[0].M,W2V[f],sizeof(float) * D);
-            for (int d=0;d<D;d++) TM[e].G[0].S[d]=SSEED/4; //dangerous!!!!
+            for (int d=0;d<D;d++) TM[e].G[0].S[d]=min_variance; //dangerous!!!!
             if (verbosity)  cerr << "Biasing verbatim translation of " << srcdict->decode(f) << "\n";
         }else
             for (int d=0;d<D;d++){
                 TM[e].G[0].M[d]=0.0; //pick mean zero
-                TM[e].G[0].S[d]=SSEED; //take a wide standard deviation
+                TM[e].G[0].S[d]=SSEED * min_variance; //take a wide standard deviation
             }
     }
     
@@ -433,6 +478,8 @@ float logsum(float a,float b){
     else return b + logf(1+ expf(a-b));
 }
 
+int global_i=0;
+int global_j=0;
 
 float cswam::LogGauss(const int dim,const float* x,const float *m, const float *s){
     
@@ -448,45 +495,82 @@ float cswam::LogGauss(const int dim,const float* x,const float *m, const float *
     return -0.5 * (dist + dim * log2pi + logf(norm));
     
 }
-            
+
+
+float cswam::LogBeta( float x,float a,float b){
+    
+    assert(x>0 && x <1);
+    
+    //disregard constant factor!
+    
+    return (a-1) * log(x) + (b-1) * log(1-x);
+    
+}
+
+
+float cswam::Delta(int i,int j,int l,int m){
+    
+    i-=(use_null_word?1:0);
+    l-=(use_null_word?1:0);
+    
+    float d=((i - j)>0?(float)(i-j)/l:(float)(i-j)/m);   //range is [-1,+1];
+    if (use_beta_distortion) d=(d+1)/2;  //move in range [0,1];
+    
+     //reduce length penalty for short sentences
+     if (l<=6 || m<=6) d/=2;
+    
+    return d;
+}
+
+float cswam::LogDistortion(float d){
+    
+    if (use_beta_distortion)
+        return LogBeta(d,DistA,DistB);
+    else
+        return LogGauss(1,&d,&DistMean,&DistVar);
+    
+}
+
+
+
 void cswam::expected_counts(void *argv){
     
     long long s=(long long) argv;
     
-    if (! (s % 10000)) {cerr << ".";cerr.flush();}
-    //fprintf(stderr,"Thread: %lu  sentence: %d  (out of %d)\n",(long)pthread_self(),s,srcdata->numdoc());
+    int frac=(s * 1000)/srcdata->numdoc();
+     if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
     
     int trglen=trgdata->doclen(s); // length of target sentence
     int srclen=srcdata->doclen(s); //length of source sentence
     
-    float den;
+    float den;float delta=0; //distortion
     
     //reset likelihood
     localLL[s]=0;
     
     //compute denominator for each source-target pair
     for (int j=0;j<srclen;j++){
+        //global_j=j;
         //cout << "j: " << srcdict->decode(srcdata->docword(s,j)) << "\n";
         den=0;
-        for (int i=0;i<trglen;i++)
+        for (int i=0;i<trglen;i++){
+            delta=Delta(i,j,trglen,srclen);
             for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
                 assert(TM[trgdata->docword(s,i)].W[n]>0); //weight zero must be prevented!!!
-//                cerr <<  "rtarget: " << trgdict->decode(trgdata->docword(s,i))
-//                     <<   " n: " << n << " W=" << TM[trgdata->docword(s,i)].W[n] << "\n";
+                //global_i=i;
                 A[s][i][n][j]=LogGauss(D, W2V[srcdata->docword(s,j)],
                                        TM[trgdata->docword(s,i)].G[n].M,
-                                       TM[trgdata->docword(s,i)].G[n].S) + log(TM[trgdata->docword(s,i)].W[n]);
-//                cerr <<  "rtarget: " << trgdict->decode(trgdata->docword(s,i))
-//                <<   " n: " << n << " W=" << TM[trgdata->docword(s,i)].W[n]
-//                << " A:" << A[s][i][n][j] << " den: " << den << "\n";
+                                       TM[trgdata->docword(s,i)].G[n].S)
+                +log(TM[trgdata->docword(s,i)].W[n])
+                +(i>0 || !use_null_word ?logf(1-NullProb):logf(NullProb))
+                +(i>0 || !use_null_word ?LogDistortion(delta):0);
+                
                 if (i==0 && n==0) //den must be initialized
                     den=A[s][i][n][j];
                 else
                     den=logsum(den,A[s][i][n][j]);
-                //                    cerr << trgdict->decode(trgdata->docword(s,i)) << " n:" << n << "\n";
-                //                    cerr << "DEN : " << den << "\n";
             }
-        
+        }
         //update local likelihood
         localLL[s]+=den;
         
@@ -494,25 +578,7 @@ void cswam::expected_counts(void *argv){
             for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
                 
                 assert(A[s][i][n][j]<= den);
-//                if (!(A[s][i][n][j] <= den)){
-//                    cerr << "\nsource: " << srcdict->decode(srcdata->docword(s,j)) << " trg: "<< trgdict->decode(trgdata->docword(s,i)) << " n: " <<  n << " A: " << A[s][i][n][j] <<  "\n";
-//                    float locden=0;
-//                    for (int li=0;li<trglen;li++){
-//                        cerr << "target: " << trgdict->decode(trgdata->docword(s,li))
-//                        << " size: " << TM[trgdata->docword(s,li)].n << "\n";
-//                        for (int ln=0;ln<TM[trgdata->docword(s,li)].n;ln++){
-//                            cerr <<  "n:" << ln << " W=" << TM[trgdata->docword(s,li)].W[ln]
-//                            << " A:" << A[s][li][ln][j] << " den: " << den;
-//                            if (TM[trgdata->docword(s,li)].W[ln]>0)
-//                                cerr << " logA= "
-//                                << LogGauss(D, W2V[srcdata->docword(s,j)],
-//                                            TM[trgdata->docword(s,li)].G[ln].M,
-//                                            TM[trgdata->docword(s,li)].G[ln].S) + log(TM[trgdata->docword(s,li)].W[ln]);
-//                            cerr << "\n";
-//                        }
-//                    }
-//                    exit(1);
-//                }
+                
                 A[s][i][n][j]=expf(A[s][i][n][j]-den); // A is now a regular expected count
                 
                 if (A[s][i][n][j]<0.000000001) A[s][i][n][j]=0; //take mall risk of wrong normalization
@@ -521,53 +587,121 @@ void cswam::expected_counts(void *argv){
                 
             }
     }
+    
+   
+    
 }
 
-
-
+void cswam::EstimateBeta(float &a, float &b,  float m,  float s){
+    
+    b = (s * m -s + m * m * m - 2 * m * m + m)/s;
+    a = ( m * b )/(1-m);
+}
 
 
 void cswam::maximization(void *argv){
     
     long long d=(long long) argv;
     
-    if (!(d  % 10)) cerr <<".";
-    //Maximization step: Mean;
-    for (int s=0;s<srcdata->numdoc();s++)
-        for (int i=0;i<trgdata->doclen(s);i++)
-            for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
-                for (int j=0;j<srcdata->doclen(s);j++)
-                    if (A[s][i][n][j]>0)
-                        TM[trgdata->docword(s,i)].G[n].M[d]+=A[s][i][n][j] * W2V[srcdata->docword(s,j)][d];
-    
-    //second pass
-    for (int e=0;e<trgdict->size();e++)
-        for (int n=0;n<TM[e].n;n++)
-            if (Den[e][n]>0)
-                TM[e].G[n].M[d]/=Den[e][n]; //update the mean estimated
-    
-    if (train_variances){
-        //Maximization step: Variance;
+    int frac=(d * 1000)/D;
+    if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+
+    if (d==D){
+        //this thread is to maximize the global distortion model
+        //Maximization step: Mean and variance of distortion model
         
+        //Mean
+        
+        double totwdist=0, totdistprob=0, totnullprob=0, delta=0;
+        for (int s=0;s<srcdata->numdoc();s++)
+            for (int i=0;i<trgdata->doclen(s);i++)
+                for (int j=0;j<srcdata->doclen(s);j++){
+                    delta=Delta(i,j,trgdata->doclen(s),srcdata->doclen(s));
+                    for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
+                        if (A[s][i][n][j]>0){
+                            if (i>0 || !use_null_word){
+                                totwdist+=A[s][i][n][j]*delta;
+                                totdistprob+=A[s][i][n][j];
+                            }
+                            else{
+                                totnullprob+=A[s][i][n][j];
+                            }
+                        }
+                }
+        
+        if (use_null_word && fix_null_prob==0)
+            NullProb=(float)totnullprob/(totdistprob+totnullprob);
+
+        if (distortion_mean) //then update the mean
+            DistMean=totwdist/totdistprob;
+        
+        
+        //Variance
+        if (distortion_var){
+            double  totwdeltadist=0;
+            for (int s=0;s<srcdata->numdoc();s++)
+                for (int i=1;i<trgdata->doclen(s);i++) //exclude i=0!
+                    for (int j=0;j<srcdata->doclen(s);j++){
+                        delta=Delta(i,j,trgdata->doclen(s),srcdata->doclen(s));
+                        for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
+                            if (A[s][i][n][j]>0)
+                                totwdeltadist+=A[s][i][n][j] * (delta-DistMean) * (delta-DistMean);
+                        
+                    }
+            
+            DistVar=totwdeltadist/totdistprob;
+        }
+       
+        cerr << "Dist: " << DistMean << " " << DistVar << "\n";
+
+        if (use_null_word)
+            cerr << "NullProb: " << NullProb << "\n";
+
+        if (use_beta_distortion){
+            cerr << "Beta A: " << DistA << " Beta B: " << DistB << "\n";
+            EstimateBeta(DistA,DistB,DistMean,DistVar);
+        }
+        
+    }
+    else{
+        //Maximization step: Mean;
         for (int s=0;s<srcdata->numdoc();s++)
             for (int i=0;i<trgdata->doclen(s);i++)
                 for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
                     for (int j=0;j<srcdata->doclen(s);j++)
                         if (A[s][i][n][j]>0)
-                            TM[trgdata->docword(s,i)].G[n].S[d]+=
-                            (A[s][i][n][j] *
-                             (W2V[srcdata->docword(s,j)][d]-TM[trgdata->docword(s,i)].G[n].M[d]) *
-                             (W2V[srcdata->docword(s,j)][d]-TM[trgdata->docword(s,i)].G[n].M[d])
-                             );
+                            TM[trgdata->docword(s,i)].G[n].M[d]+=A[s][i][n][j] * W2V[srcdata->docword(s,j)][d];
         
         //second pass
         for (int e=0;e<trgdict->size();e++)
             for (int n=0;n<TM[e].n;n++)
-                if (Den[e][n]>0){
-                    TM[e].G[n].S[d]/=Den[e][n];
-                    if (TM[e].G[n].S[d] < 0.001) TM[e].G[n].S[d]=0.001;
-                }
+                if (Den[e][n]>0)
+                    TM[e].G[n].M[d]/=Den[e][n]; //update the mean estimated
+        
+        if (train_variances){
+            //Maximization step: Variance;
+            
+            for (int s=0;s<srcdata->numdoc();s++)
+                for (int i=0;i<trgdata->doclen(s);i++)
+                    for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
+                        for (int j=0;j<srcdata->doclen(s);j++)
+                            if (A[s][i][n][j]>0)
+                                TM[trgdata->docword(s,i)].G[n].S[d]+=
+                                (A[s][i][n][j] *
+                                 (W2V[srcdata->docword(s,j)][d]-TM[trgdata->docword(s,i)].G[n].M[d]) *
+                                 (W2V[srcdata->docword(s,j)][d]-TM[trgdata->docword(s,i)].G[n].M[d])
+                                 );
+            
+            //second pass
+            for (int e=0;e<trgdict->size();e++)
+                for (int n=0;n<TM[e].n;n++)
+                    if (Den[e][n]>0){
+                        TM[e].G[n].S[d]/=Den[e][n];
+                        if (TM[e].G[n].S[d] < min_variance) TM[e].G[n].S[d]=min_variance; //improves generalization!
+                    }
+        }
     }
+    
 }
 
 
@@ -578,17 +712,18 @@ void cswam::expansion(void *argv){
         //get mean of variances
         float S=0; for (int d=0;d<D;d++) S+=TM[e].G[n].S[d]; S/=D;
         
-        float SThresh=0.5; float eCThresh=100;
+        //variance treshold and population threshold
+        float SThresh=5 * min_variance; float eCThresh=10;
         
-        //show large support set and variances that do not reduce
-        if ( (S/TM[e].G[n].mS >= 0.95) &&                  //mean variance does not reduce
-             ((TM[e].G[n].eC >= eCThresh &&  S> 0.1 )  ||  //population is large
-               (S > SThresh && TM[e].G[n].eC >=  5))) {    //variance is large
+        //show large support set and variances that do not reduce: more aggressive split
+        if (//(S/TM[e].G[n].mS) >= 0.95 &&      //mean variance does not reduce significantly
+            TM[e].G[n].eC >= eCThresh  &&      //population is large
+            S > SThresh) {                     //variance is large
             if (verbosity)
                 cerr << "\n" << trgdict->decode(e) << " n= " << n << " (" << TM[e].n << ") Counts: "
                 << TM[e].G[n].eC  << " mS: " << S << "\n";
-
-                 //expand: create new Gaussian after Gaussian n
+            
+            //expand: create new Gaussian after Gaussian n
             Gaussian *nG=new Gaussian[TM[e].n+1];
             float    *nW=new float[TM[e].n+1];
             memcpy((void *)nG,(const void *)TM[e].G, (n+1) * sizeof(Gaussian));
@@ -600,14 +735,11 @@ void cswam::expansion(void *argv){
             //initialize mean and variance vectors
             nG[n+1].M=new float[D];nG[n+1].S=new float[D];
             for (int d=0;d<D;d++){ //assign new means, keep old variances
-                //if (nG[n+1].S[d] > S){ //if variance is above average: take apart
-                    nG[n+1].M[d]=nG[n].M[d] + 2 * sqrt(nG[n].S[d]);
-                    nG[n].M[d]=nG[n].M[d] - 2 * sqrt(nG[n].S[d]);
-                //}
-                //else{ //keep the same
-                //    nG[n+1].M[d]=nG[n].M[d];
-                //}
-                 nG[n+1].S[d]=nG[n].S[d]=(2 * nG[n].S[d]); //enlarge a bit the variance: maybe better increse
+               
+                nG[n+1].M[d]=nG[n].M[d] + 2 * sqrt(nG[n].S[d]);
+                nG[n].M[d]=nG[n].M[d] - 2 * sqrt(nG[n].S[d]);
+              
+                nG[n+1].S[d]=nG[n].S[d]=(2 * nG[n].S[d]); //enlarge a bit the variance: maybe better increase
             }
             nG[n+1].eC=nG[n].eC;
             nG[n+1].mS=nG[n].mS=S;
@@ -659,7 +791,7 @@ void cswam::contraction(void *argv){
         for (int n1=0;n1<n;n1++) if ((max_rel_dist=rl1(TM[e].G[n].M,TM[e].G[n1].M,D))< 0.01) break;
 
         //remove insignificant and overlapping gaussians
-        if (TM[e].W[n] < 0.0001 || max_rel_dist<0.01) { //eliminate this component
+        if (TM[e].W[n] < 0.001 || max_rel_dist<0.01) { //eliminate this component
             assert(TM[e].n>1);
             if (verbosity) cerr << "\n" << trgdict->decode(e) << " n= " << n << " Weight: " << TM[e].W[n] <<  " RelDist= " << max_rel_dist << "\n";
             //expand: create new Gaussian after Gaussian n
@@ -756,18 +888,19 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
                     for (int j=0;j<srcdata->doclen(s);j++)
                         Den[trgdata->docword(s,i)][n]+=A[s][i][n][j];
         }
+        
         cerr << "LL = " << LL << "\n";
         
         
         cerr << "M-step: ";
-        for (long long d=0;d<D;d++){
+        for (long long d=0;d<=D;d++){  //include special job d=D for distortion model
             t[d].ctx=this; t[d].argv=(void *)d;
             thpool_add_work(thpool, &cswam::maximization_helper, (void *)&t[d]);
         }
-        
+                
         //join all threads
         thpool_wait(thpool);
-
+        
         //some checks of the models: fix degenerate models
         for (int e=0;e<trgdict->size();e++)
             if (e!=trgEoD)
@@ -775,7 +908,7 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
                     if (!Den[e][n]){
                         if (verbosity)
                             cerr << "\nRisk of degenerate model. Word: " << trgdict->decode(e) << " n: " << n << " eC:" << TM[e].G[n].eC << "\n";
-                        for (int d=0;d<D;d++) TM[e].G[n].S[d]=SSEED;
+                        for (int d=0;d<D;d++) TM[e].G[n].S[d]=SSEED * min_variance;
                     }
     
 //            if (trgdict->encode("bege")==e){
@@ -798,30 +931,30 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
             
             freeAlphaDen(); //needs to be reallocated as models might change
             
-            //if ((iter % 2)==0){
-                cerr << "\nExpansion step: ";
-                for (long long e=0;e<trgdict->size();e++){
-                    //check if to increase number of gaussians per target word
-                    t[e].ctx=this; t[e].argv=(void *)e;
-                    thpool_add_work(thpool1, &cswam::expansion_helper, (void *)&t[e]);
-                }
-                //join all threads
-                thpool_wait(thpool1);
-           
-                cerr << "\nContraction step: ";
-                for (long long e=0;e<trgdict->size();e++){
-                    //check if to decrease number of gaussians per target word
-                    t[e].ctx=this; t[e].argv=(void *)e;
-                    thpool_add_work(thpool1, &cswam::contraction_helper, (void *)&t[e]);
-                }
-                //join all threads
-                thpool_wait(thpool1);
-            //}
+            
+            cerr << "\nS-step: ";
+            for (long long e=0;e<trgdict->size();e++){
+                //check if to increase number of gaussians per target word
+                t[e].ctx=this; t[e].argv=(void *)e;
+                thpool_add_work(thpool, &cswam::expansion_helper, (void *)&t[e]);
+            }
+            //join all threads
+            thpool_wait(thpool);
+            
+            cerr << "\nP-step: ";
+            for (long long e=0;e<trgdict->size();e++){
+                //check if to decrease number of gaussians per target word
+                t[e].ctx=this; t[e].argv=(void *)e;
+                thpool_add_work(thpool, &cswam::contraction_helper, (void *)&t[e]);
+            }
+            //join all threads
+            thpool_wait(thpool);
+            
             
         }
         
        
-        if (verbosity) system("date");
+        if (srcdata->numdoc()>10000) system("date");
         
         saveModel(modelfile);
 
@@ -859,7 +992,7 @@ void cswam::aligner(void *argv){
     
     //Viterbi alignment: find the most probable alignment for source
     float score; float best_score;int best_i;float sum;
-
+    
     bool some_not_null=false; int first_target=0;
     
     for (int j=0;j<srclen;j++){
@@ -877,8 +1010,25 @@ void cswam::aligner(void *argv){
                                TM[trgdata->docword(s,i)].G[n].S)+log(TM[trgdata->docword(s,i)].W[n]);
                 if (n==0) sum=score;
                 else sum=logsum(sum,score);
-                if (i>0) sum-=(i > j? log(i-j):log((j-i)+2));
+            } //completed mixture score
+            
+            if (distortion_var || distortion_mean){
+                if (i>0 ||!use_null_word){
+                    float d=Delta(i,j,trglen,srclen);
+                    sum+=logf(1-NullProb) + LogDistortion(d);
+                }
+                else
+                    if (use_null_word ) sum+=logf(NullProb);
             }
+            else //use plain distortion model
+                if (i>0){
+                    if (i - (use_null_word?1:0) > j )
+                        sum-=log(i- (use_null_word?1:0) -j);
+                    else if  (i - (use_null_word?1:0) < j )
+                        sum-=log(j - i + (use_null_word?1:0));
+                }
+            //add distortion score now
+            
             //cout << "score: " << sum << "\n";
             //  cout << "\t " << srcdict->decode(srcdata->docword(s,j)) << "  " << dist << "\n";
             //if (dist > -50) score=(float)exp(-dist)/norm;
@@ -907,6 +1057,14 @@ int cswam::test(char *srctestfile, char *trgtestfile, char* modelfile, char* ali
     {mfstream out(alignfile,ios::out);} //empty the file
     
     initModel(modelfile);
+    
+    if (!distortion_mean){
+        if (use_beta_distortion){
+            cerr << "ERROR: cannot test with beta distribution without mean\n";
+            return 0;
+        }
+        DistMean=0; //force mean to zero
+    }
     
     //Load training data
     srcdata=new doc(srcdict,srctestfile);
