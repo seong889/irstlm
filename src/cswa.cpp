@@ -83,8 +83,8 @@ int main(int argc, char **argv){
     double fixnullprob=0;
     bool verbosity=false;
     double minvar=0.1;
-    bool distmean=false;
-    bool distvar=false;
+    bool distmean=true;
+    bool distvar=true;
     bool distbeta=false;
     
     DeclareParams((char*)
