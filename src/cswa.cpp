@@ -77,12 +77,11 @@ int main(int argc, char **argv){
     bool help=false;
     int prunethreshold=3;
     bool trainvar=true;
-    bool normvectors=false;
-    bool scalevectors=false;
+    bool normvectors=true;
     bool usenullword=true;
     double fixnullprob=0;
     bool verbosity=false;
-    double minvar=0.1;
+    double minvar=0.2;
     bool distmean=true;
     bool distvar=true;
     bool distbeta=false;
@@ -138,9 +137,6 @@ int main(int argc, char **argv){
                   "DistBeta", CMDBOOLTYPE|CMDMSG, &distbeta, "<bool>: use beta distribution for distortion (default true)",
                   "db", CMDBOOLTYPE|CMDMSG, &distbeta, "<bool>: use beta distribution for distortion (default true)",
                   
-                  "ScaleVectors", CMDBOOLTYPE|CMDMSG, &scalevectors, "<bool>: scale vectors  (default false)",
-                  "sv", CMDBOOLTYPE|CMDMSG, &scalevectors, "<bool>: scale vectors  (default false)",
-                  
                   "TxtModel", CMDSTRINGTYPE|CMDMSG, &modeltxtfile, "<fname> : model in textual form",
                   "txt", CMDSTRINGTYPE|CMDMSG, &modeltxtfile, "<fname> : model in readable form",
 
@@ -182,10 +178,12 @@ int main(int argc, char **argv){
     
     cswam *model=new cswam(srcdatafile,trgdatafile,w2vfile,
                            usenullword,fixnullprob,
-                           normvectors,scalevectors,
+                           normvectors,
                            trainvar,minvar,
                            distbeta, distmean,distvar,
                            verbosity);
+    
+    ngramtable* friends;
     
     if (iterations)
         model->train(srcdatafile,trgdatafile,modelfile,iterations,threads);

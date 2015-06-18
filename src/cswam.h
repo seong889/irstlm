@@ -17,6 +17,10 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA
  
  ******************************************************************************/
+#ifndef MF_CSWAM_H
+#define MF_CSWAM_H
+
+#include <vector>
 
 typedef struct{
     
@@ -34,6 +38,13 @@ typedef struct{
     Gaussian *G; //Gaussians
 } TransModel;
 
+typedef struct{
+    int      word;      //word code
+    float    score;  //score (mutual information)
+} Friend;
+
+typedef std::vector<Friend> FriendList; //list of word Friends
+
 class cswam {
     
     //data
@@ -41,9 +52,10 @@ class cswam {
     dictionary* trgdict; //target dictionary
     doc* srcdata;   //source training data
     doc* trgdata;   //target trainign data
+    FriendList* friends; //prior list of translation candidates
     
     //word2vec
-    float     **W2V;   //vector for each source word!
+    float     **W2V;   //vector for each source word
     int       D;       //dimension of vector space
     
     //model
@@ -54,7 +66,6 @@ class cswam {
     
     //settings
     bool normalize_vectors;
-    bool scale_vectors;
     bool train_variances;
     double fix_null_prob;
     bool use_null_word;
@@ -76,7 +87,8 @@ class cswam {
     int **alignments;  //word alignment info
     int threads;       //number of threads
     int bucket;        //size of bucket
-
+    int iter;          //current iteration
+    
     struct task {      //basic task info to run task
         void *ctx;
         void *argv;
@@ -87,7 +99,7 @@ public:
     
     cswam(char* srcdatafile,char* trgdatafile, char* word2vecfile,
           bool usenull,double fix_null_prob,
-          bool normv2w, bool scalew2v,
+          bool normv2w, 
           bool trainvar,float minvar,
           bool distbeta, bool distmean,bool distvar,
           bool verbose);
@@ -95,7 +107,9 @@ public:
     ~cswam();
     
     void loadword2vec(char* fname);
+    void randword2vec(const char* word,float* vec,int it=0);
     void initModel(char* fname);
+    void initEntry(int entry);
     int saveModel(char* fname);
     int saveModelTxt(char* fname);
     int loadModel(char* fname,bool expand=false);
@@ -135,7 +149,8 @@ public:
         task t=*(task *)argv;
         ((cswam *)t.ctx)->contraction(t.argv);return NULL;
     };
-    
+   
+    void findfriends(FriendList* friends);
     int train(char *srctrainfile,char *trgtrainfile,char* modelfile, int maxiter,int threads=1);
     
     void aligner(void *argv);
@@ -149,3 +164,4 @@ public:
     
 };
 
+#endif

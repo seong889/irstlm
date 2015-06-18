@@ -80,11 +80,6 @@ void createtempfile(mfstream  &fileStream, string &filePath, std::ios_base::open
 {       
 	filePath = createtempName();
 	fileStream.open(filePath.c_str(), flags);
-	if (fileStream == 0)
-	{
-		perror("error creating file");
-		exit_error(IRSTLM_ERROR_IO);
-	}
 }
 
 void removefile(const std::string &filePath)
