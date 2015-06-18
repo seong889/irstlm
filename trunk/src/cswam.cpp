@@ -35,18 +35,21 @@
 #include "dictionary.h"
 #include "ngramtable.h"
 #include "doc.h"
+#include <algorithm>
+#include <unordered_map>
+#include <vector>
 #include "cswam.h"
 
 #define BUCKET 1000
-#define SSEED 1000
+#define SSEED 50
 
 using namespace std;
 
-#define MY_RAND (((float)random()/RAND_MAX)* 2.0 - 1.0)
+#define MY_RAND (((float)random()/RAND_MAX)* 2.0 - 1.0) //random values between -1 and +1
 	
 cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
              bool usenull,double fixnullprob,
-             bool normvect,bool scalevect,
+             bool normvect,
              bool trainvar,float minvar,
              bool distbeta,bool distmean,bool distvar,
              bool verbose){
@@ -56,10 +59,10 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
     TM=NULL;
     A=NULL;
     Den=NULL;
+    friends=NULL;
     
     //setting
     normalize_vectors=normvect;
-    scale_vectors=scalevect;
     train_variances=trainvar;
     use_null_word=usenull;
     min_variance=minvar;
@@ -73,7 +76,7 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
     
     
     cout << "cswam configuration.\n";
-    cout << "Vectors:  normalize [" << normalize_vectors << "]  scale [" << scale_vectors << "]\n";
+    cout << "Vectors:  normalize [" << normalize_vectors << "] \n";
     cout << "Gaussian Variances: train [" << train_variances << "] min [" << min_variance << "] initial [" << min_variance * SSEED << "]\n";
     cout << "Null word: active [" << use_null_word << "] fix_null_prob [" << fix_null_prob << "]\n";
     cout << "Distortion model: use beta [" << use_beta_distortion << "] update mean [" << distortion_mean << "] update variance [" << distortion_var << "]\n";
@@ -129,6 +132,8 @@ cswam::~cswam() {
         delete [] W2V;
     }
     
+    if (friends) delete [] friends;
+    
     cerr << "Releasing memory of srcdict\n";
     delete srcdict;
     cerr << "Releasing memory of srcdict\n";
@@ -137,15 +142,15 @@ cswam::~cswam() {
     
 }
 
-void randword2vec(const char* word,float* vec,int dim){
+void cswam::randword2vec(const char* word,float* vec,int it){
     
     //initialize random generator
-    srandom(crc16_ccitt(word,strlen(word)));
+    srandom(crc16_ccitt(word,strlen(word))+it);
     
-    //generate random numbers between -2 and +2
-    for (int d=0;d<dim;d++)
-        vec[d]=(((float)random()/RAND_MAX)* 4.0 - 2.0);
-    
+    //generate random numbers between -1 and +1,
+    //then scale and shift according to w2v
+    for (int d=0;d<D;d++)
+          vec[d]=(float)(MY_RAND * SSEED * min_variance);
 }
 
 
@@ -181,63 +186,119 @@ void cswam::loadword2vec(char* fname){
     }
     cerr << "\n";
     
-    //looking for missing source words in w2v
+    
+    cerr << "looking for missing source words in w2v\n";
     int newwords=0;
     for ( f=0;f<srcdict->size();f++){
         if (W2V[f]==NULL && f!=srcBoD && f!=srcEoD) {
             if (verbosity)
-                cerr << "Missing src word in w2v: " << srcdict->decode(f) << "\n";
+                cerr << "Missing src word in w2v: [" << f << "] " << srcdict->decode(f) << "\n";
+            
             W2V[f]=new float[D];
-        
-            randword2vec(srcdict->decode(f),W2V[f],D);
-        
+            
+            //generate random vectors with same distribution
+            randword2vec(srcdict->decode(f),W2V[f]);
+            
             newwords++;
             
             if (verbosity){
-                for (int d=0;d<D;d++) cerr << " " << W2V[f][d]; cerr << "\n";
-            }
+                for (int d=0;d<D;d++) cerr << " " << W2V[f][d]; cerr << "\n";}
+            
         }
     }
-
+    
     cerr << "Generated " << newwords << " missing vectors\n";
     
     
-    if (normalize_vectors || scale_vectors){
-        
-        //normalized vector components
-        float mean[D]; memset(mean,0,D*sizeof(float));
-        float var[D]; memset(var,0,D*sizeof(float));
-        
-        //collect mean and variance statistics
-        for ( f=0;f<srcdict->size();f++){
-            for (int d=0;d<D;d++){
-                mean[d]+=W2V[f][d];
-                var[d]+=(W2V[f][d] * W2V[f][d]);
-            }
-        }
-        //compute means and variances for each dimension
-        for (int d=0;d<D;d++){
-            mean[d]/=srcdict->size();
-            var[d]=var[d]/srcdict->size() - (mean[d]*mean[d]);
-            cerr << d << " mean: " << mean[d] << "  sd: " << sqrt(var[d]) << "\n";
-        }
-        
-        
-        if (normalize_vectors){
-            cerr << "Shifting vectors\n";
-            for (int f=0;f<srcdict->size();f++)
-                for (int d=0;d<D;d++) W2V[f][d]=(W2V[f][d] - mean[d]);
-        }
-        if (normalize_vectors || scale_vectors){
-            cerr << "Scaling vectors\n";
-            for ( f=0;f<srcdict->size();f++)
-                for (int d=0;d<D;d++) W2V[f][d]=W2V[f][d]/sqrt(var[d]);
-            
+    if (normalize_vectors){
+       cerr << "Normalizing vectors\n";
+        for (f=0;f<srcdict->size();f++)
+        if (W2V[f]!=NULL){
+            float norm=0;
+            for (int d=0;d<D;d++) norm+=W2V[f][d]*W2V[f][d];
+            norm=sqrt(norm);
+            for (int d=0;d<D;d++) W2V[f][d]/=norm;
         }
     }
     
 };
 
+void cswam::initEntry(int e){
+    assert(TM[e].G==NULL);
+    
+    //allocate a suitable number of gaussians
+    
+    TM[e].n=(friends[e].size()?friends[e].size():1);
+  
+    assert(TM[e].n>0);
+    TM[e].G=new Gaussian [TM[e].n];TM[e].W=new float[TM[e].n];
+    for (int n=0;n<TM[e].n;n++){
+        
+        TM[e].G[n].M=new float [D];
+        TM[e].G[n].S=new float [D];
+        
+        TM[e].G[n].eC=0;
+        TM[e].G[n].mS=0;
+        
+        TM[e].W[n]=1.0/(float)TM[e].n;
+        
+        if (friends[e].size()){
+            int f=friends[e][n].word; //initialize with source vector
+            memcpy(TM[e].G[n].M,W2V[f],sizeof(float) * D);
+        }
+        else{
+          randword2vec(trgdict->decode(e),TM[e].G[n].M,n);
+        }
+       
+        for (int d=0;d<D;d++)
+            TM[e].G[n].S[d]=min_variance * SSEED; //take a wide standard deviation
+        
+    }
+    
+}
+
+
+
+//void oldinitEntry(int e){
+//
+//    assert(TM[e].G==NULL);
+//    
+//    //allocate a suitable number of gaussians
+//    TM[e].n=(int)ceil(log((double)trgdict->freq(e)+1.1));
+//    
+//    //some exceptions if
+//    
+//    assert(TM[e].n>0);
+//    TM[e].G=new Gaussian [TM[e].n];TM[e].W=new float[TM[e].n];
+//    for (int n=0;n<TM[e].n;n++){
+//        
+//        TM[e].G[n].M=new float [D];
+//        TM[e].G[n].S=new float [D];
+//        
+//        TM[e].G[n].eC=0;
+//        TM[e].G[n].mS=0;
+//        
+//        TM[e].W[n]=1.0/(float)TM[e].n;
+//        
+//        //initialize with w2v value if the same word is also in src
+//        int f=srcdict->encode(trgdict->decode(e));
+//        float srcfreq=srcdict->freq(f);float trgfreq=trgdict->freq(e);
+//        if (f!=srcdict->oovcode() && srcfreq/trgfreq < 1.1 && srcfreq/trgfreq > 0.9 && srcfreq < 10 &&  f!=srcBoD && f!=srcEoD){
+//            memcpy(TM[e].G[n].M,W2V[f],sizeof(float) * D);
+//            for (int d=0;d<D;d++) TM[e].G[n].S[d]=min_variance; //dangerous!!!!
+//            if (verbosity)  cerr << "Biasing verbatim translation of " << srcdict->decode(f) << "\n";
+//        }else{
+//            //pick candidates from friends
+//            
+//            
+//                randword2vec(trgdict->decode(e),TM[e].G[n].M,n);
+//            
+//            for (int d=0;d<D;d++)
+//                TM[e].G[n].S[d]=W2Vsd[d] * 10; //take a wide standard deviation
+//        }
+//    }
+//    
+//}
 
 void cswam::initModel(char* modelfile){
     
@@ -245,7 +306,8 @@ void cswam::initModel(char* modelfile){
     bool model_available=false;
     FILE* f;if ((f=fopen(modelfile,"r"))!=NULL){fclose(f);model_available=true;}
     
-    if (model_available) loadModel(modelfile,true); //we are in training mode!
+    if (model_available)
+        loadModel(modelfile,true); //we are in training mode!
     else{
         cerr << "Initialize model\n";
         
@@ -256,35 +318,18 @@ void cswam::initModel(char* modelfile){
             DistMean=0;DistVar=10; //gaussian distribution over -1,+1: almost uniform
         }
         
-        if (use_null_word)
-            NullProb=(fix_null_prob?fix_null_prob:0.05); //null word alignment probability
-        
         TM=new TransModel[trgdict->size()];
-    
-        for (int e=0; e<trgdict->size(); e++){
-            TM[e].n=1;TM[e].G=new Gaussian [1];TM[e].W=new float[1];
-            TM[e].G[0].M=new float [D];
-            TM[e].G[0].S=new float [D];
-            
-            TM[e].G[0].eC=0;
-            TM[e].G[0].mS=0;
-            
-            TM[e].W[0]=1;
-            
-            //initialize with w2v value if the same word is also in src
-            int f=srcdict->encode(trgdict->decode(e));
-            float srcfreq=srcdict->freq(f);float trgfreq=trgdict->freq(e);
-            if (f!=srcdict->oovcode() && srcfreq/trgfreq < 1.1 && srcfreq/trgfreq > 0.9 && srcfreq < 10 &&  f!=srcBoD && f!=srcEoD){
-                memcpy(TM[e].G[0].M,W2V[f],sizeof(float) * D);
-                for (int d=0;d<D;d++) TM[e].G[0].S[d]=min_variance; //dangerous!!!!
-                if (verbosity)  cerr << "Biasing verbatim translation of " << srcdict->decode(f) << "\n";
-            }else
-                for (int d=0;d<D;d++){
-                    TM[e].G[0].M[d]=0.0; //pick mean zero
-                    TM[e].G[0].S[d]=SSEED * min_variance; //take a wide standard deviation
-                }
-        }
+        
+        friends=new FriendList[trgdict->size()];
+        findfriends(friends);
+        
+        for (int e=0; e<trgdict->size(); e++) initEntry(e);
+        
     }
+    //this can overwrite existing model
+    if (use_null_word)
+        NullProb=(fix_null_prob?fix_null_prob:0.05); //null word alignment probability
+    
 }
 
 int cswam::saveModelTxt(char* fname){
@@ -363,6 +408,7 @@ int cswam::loadModel(char* fname,bool expand){
     inp.read((char*)&DistVar, sizeof(float));
     inp.read((char*)&NullProb,sizeof(float));
     
+    cerr << "DistMean: " << DistMean << " DistVar: " << DistVar << " NullProb: " << NullProb << "\n";
     if (use_beta_distortion)
         EstimateBeta(DistA,DistB,DistMean,DistVar);
     
@@ -382,30 +428,7 @@ int cswam::loadModel(char* fname,bool expand){
     inp.close();
     
     cerr << "\nInitializing " << trgdict->size()-current_size << " new entries .... ";
-    for (int e=current_size; e<trgdict->size(); e++){
-        TM[e].n=1;TM[e].G=new Gaussian [1];TM[e].W=new float[1];
-        TM[e].G[0].M=new float [D];
-        TM[e].G[0].S=new float [D];
-        
-        TM[e].G[0].eC=0;
-        TM[e].G[0].mS=0;
-        
-        TM[e].W[0]=1;
-        
-        //initialize with w2v value if the same word is also in src, similar frequency, not too frequent
-        int f=srcdict->encode(trgdict->decode(e));
-        float srcfreq=srcdict->freq(f);float trgfreq=trgdict->freq(e);
-        if (f!=srcdict->oovcode() && srcfreq/trgfreq < 1.1 && srcfreq/trgfreq > 0.9 && srcfreq < 10 && f!=srcBoD && f!=srcEoD){
-            memcpy(TM[e].G[0].M,W2V[f],sizeof(float) * D);
-            for (int d=0;d<D;d++) TM[e].G[0].S[d]=min_variance; //dangerous!!!!
-            if (verbosity)  cerr << "Biasing verbatim translation of " << srcdict->decode(f) << "\n";
-        }else
-            for (int d=0;d<D;d++){
-                TM[e].G[0].M[d]=0.0; //pick mean zero
-                TM[e].G[0].S[d]=SSEED * min_variance; //take a wide standard deviation
-            }
-    }
-    
+    for (int e=current_size; e<trgdict->size(); e++) initEntry(e);
     cerr << "\nDone\n";
     return 1;
 }
@@ -632,12 +655,12 @@ void cswam::maximization(void *argv){
         if (use_null_word && fix_null_prob==0)
             NullProb=(float)totnullprob/(totdistprob+totnullprob);
 
-        if (distortion_mean) //then update the mean
+        if (distortion_mean && iter >0) //then update the mean
             DistMean=totwdist/totdistprob;
         
         
         //Variance
-        if (distortion_var){
+        if (distortion_var && iter >0){
             double  totwdeltadist=0;
             for (int s=0;s<srcdata->numdoc();s++)
                 for (int i=1;i<trgdata->doclen(s);i++) //exclude i=0!
@@ -696,7 +719,7 @@ void cswam::maximization(void *argv){
             for (int e=0;e<trgdict->size();e++)
                 for (int n=0;n<TM[e].n;n++)
                     if (Den[e][n]>0){
-                        TM[e].G[n].S[d]/=Den[e][n];
+                        TM[e].G[n].S[d]/=Den[e][n]; //might be too aggressive?
                         if (TM[e].G[n].S[d] < min_variance) TM[e].G[n].S[d]=min_variance; //improves generalization!
                     }
         }
@@ -716,7 +739,7 @@ void cswam::expansion(void *argv){
         float SThresh=5 * min_variance; float eCThresh=10;
         
         //show large support set and variances that do not reduce: more aggressive split
-        if (//(S/TM[e].G[n].mS) >= 0.95 &&      //mean variance does not reduce significantly
+        if ((S/TM[e].G[n].mS) >= 0.95 &&      //mean variance does not reduce significantly
             TM[e].G[n].eC >= eCThresh  &&      //population is large
             S > SThresh) {                     //variance is large
             if (verbosity)
@@ -781,32 +804,47 @@ float rl1(const float* a,const float*b, int d){
     return maxreldist;
 }
 
+float al1(const float* a,const float*b, int d){
+    float maxdist=0; float dist;
+    for (int i=0;i<d;i++){
+        dist=abs(a[i]-b[i]);
+        if (dist>maxdist) maxdist=dist;
+    }
+    return maxdist;
+}
+
 void cswam::contraction(void *argv){
     
     long long e=(long long) argv;
-
+    
+    float min_std=sqrt(min_variance);
+    float min_weight=0.01;
+    
     for (int n=0;n<TM[e].n;n++){
+        int n1=0;
+        // look if the component overlaps with some of the previous ones
+        float max_dist=1;
+        for (n1=0;n1<n;n1++) if ((max_dist=al1(TM[e].G[n].M,TM[e].G[n1].M,D))< min_std) break;
 
-        float max_rel_dist=1;
-        for (int n1=0;n1<n;n1++) if ((max_rel_dist=rl1(TM[e].G[n].M,TM[e].G[n1].M,D))< 0.01) break;
-
-        //remove insignificant and overlapping gaussians
-        if (TM[e].W[n] < 0.001 || max_rel_dist<0.01) { //eliminate this component
+        //remove insignificant and overlapping gaussians (relative distance below minimum variance
+        if (TM[e].W[n] < min_weight || max_dist < min_std) { //eliminate this component
             assert(TM[e].n>1);
-            if (verbosity) cerr << "\n" << trgdict->decode(e) << " n= " << n << " Weight: " << TM[e].W[n] <<  " RelDist= " << max_rel_dist << "\n";
-            //expand: create new Gaussian after Gaussian n
+            if (verbosity) cerr << "\n" << trgdict->decode(e) << " n= " << n << " Weight: " << TM[e].W[n] <<  " Dist= " << max_dist << "\n";
+            //expand: create new mixture model with n-1 components
             Gaussian *nG=new Gaussian[TM[e].n-1];
             float    *nW=new float[TM[e].n-1];
-            if (n>0){
+            if (n>0){ //copy all entries before n
                 memcpy((void *)nG,(const void *)TM[e].G, n * sizeof(Gaussian));
                 memcpy((void *)nW,(const void *)TM[e].W, n * sizeof(float));
             }
-            if (n+1 < TM[e].n){
+            if (n+1 < TM[e].n){  //copy all entries after
                 memcpy((void *)&nG[n],(const void*)&TM[e].G[n+1],(TM[e].n-n-1) * sizeof(Gaussian));
                 memcpy((void *)&nW[n],(const void*)&TM[e].W[n+1],(TM[e].n-n-1) * sizeof(float));
             }
             
             //don't need to normalized weights!
+            if (max_dist < min_std)// this is the gaussian overlapping case
+                nW[n1]+=TM[e].W[n];  //the left gaussian inherits the weight
             
             //update TM[e] structure
             TM[e].n--;n--;
@@ -814,24 +852,26 @@ void cswam::contraction(void *argv){
             delete [] TM[e].W; TM[e].W=nW;
         }
     }
-
-    for (int n=0;n<TM[e].n;n++) assert(TM[e].W[n] > 0.0001);
-        
-
+    
+    //re-normalize weights
+    float totw=0;
+    for (int n=0;n<TM[e].n;n++){totw+=TM[e].W[n]; assert(TM[e].W[n] > 0.0001);}
+    for (int n=0;n<TM[e].n;n++){TM[e].W[n]/=totw;};
 }
 
 int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxiter,int threads){
     
    
-    initModel(modelfile);
-
     //Load training data
 
     srcdata=new doc(srcdict,srctrainfile);
     trgdata=new doc(trgdict,trgtrainfile,use_null_word); //use null word
 
+    //initialize model
+    
+    initModel(modelfile);
    
-    int iter=0;
+    iter=0;
     
     cerr << "Starting training";
     threadpool thpool=thpool_init(threads);
@@ -905,12 +945,13 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
         for (int e=0;e<trgdict->size();e++)
             if (e!=trgEoD)
                 for (int n=0;n<TM[e].n;n++)
-                    if (!Den[e][n]){
+                                       if (!Den[e][n]){
                         if (verbosity)
                             cerr << "\nRisk of degenerate model. Word: " << trgdict->decode(e) << " n: " << n << " eC:" << TM[e].G[n].eC << "\n";
                         for (int d=0;d<D;d++) TM[e].G[n].S[d]=SSEED * min_variance;
                     }
-    
+                
+       
 //            if (trgdict->encode("bege")==e){
 //                cerr << "bege " << " mS: " << TM[e].G[0].mS << " n: " << TM[e].n << " eC " << TM[e].G[0].eC << "\n";
 //                cerr << "M:"; for (int d=0;d<10;d++) cerr << " " << TM[e].G[0].M[d]; cerr << "\n";
@@ -919,33 +960,33 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
 //        }
         
         //update the weight estimates: ne need of multithreading
-        float totW;
+        float totW; int ngauss=0;
         for (int e=0;e<trgdict->size();e++){
             totW=0;
-            for (int n=0;n<TM[e].n;n++) totW+=Den[e][n];
+            for (int n=0;n<TM[e].n;n++){ totW+=Den[e][n]; ngauss++;}
             if (totW>0)
                 for (int n=0;n<TM[e].n;n++) TM[e].W[n]=Den[e][n]/totW;
         }
+        cerr << "Num Gaussians: " << ngauss << "\n";
         
         if (iter > 1){
             
             freeAlphaDen(); //needs to be reallocated as models might change
-            
-            
-            cerr << "\nS-step: ";
-            for (long long e=0;e<trgdict->size();e++){
-                //check if to increase number of gaussians per target word
-                t[e].ctx=this; t[e].argv=(void *)e;
-                thpool_add_work(thpool, &cswam::expansion_helper, (void *)&t[e]);
-            }
-            //join all threads
-            thpool_wait(thpool);
             
             cerr << "\nP-step: ";
             for (long long e=0;e<trgdict->size();e++){
                 //check if to decrease number of gaussians per target word
                 t[e].ctx=this; t[e].argv=(void *)e;
                 thpool_add_work(thpool, &cswam::contraction_helper, (void *)&t[e]);
+            }
+            //join all threads
+            thpool_wait(thpool);
+            
+            cerr << "\nS-step: ";
+            for (long long e=0;e<trgdict->size();e++){
+                //check if to increase number of gaussians per target word
+                t[e].ctx=this; t[e].argv=(void *)e;
+                thpool_add_work(thpool, &cswam::expansion_helper, (void *)&t[e]);
             }
             //join all threads
             thpool_wait(thpool);
@@ -1124,4 +1165,199 @@ int cswam::test(char *srctestfile, char *trgtestfile, char* modelfile, char* ali
     delete srcdata; delete trgdata;
     return 1;
 }
+
+//find for each target word a list of associated source words
+
+typedef std::pair <int,float> mientry;  //pair type containing src word and mi score
+bool myrank (Friend a,Friend b) { return (a.score > b.score ); }
+
+
+//void cswam::findfriends(FriendList* friends){
+//    
+//    typedef std::unordered_map<int, int> src_map;
+//    src_map* table= new src_map[trgdict->size()];
+//    
+//    //  amap["def"][7] = 2.2;
+//    //  std::cout << amap["abc"][12] << '\n';
+//    //  std::cout << amap["def"][7] << '\n';
+//    
+//    
+//    int *srcfreq=new int[srcdict->size()];
+//    int *trgfreq=new int[trgdict->size()];
+//    int totfreq=0;
+//    int minfreq=10;
+//    
+//    cerr << "collecting co-occurrences\n";
+//    for (int s=0;s<srcdata->numdoc();s++){
+//        
+//        int trglen=trgdata->doclen(s); // length of target sentence
+//        int srclen=srcdata->doclen(s); //length of source sentence
+//        
+//        int frac=(s * 1000)/srcdata->numdoc();
+//        if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+//        
+//        for (int i=0;i<trglen;i++){
+//            int trg=trgdata->docword(s,i);
+//            float trgdictfreq=trgdict->freq(trg);
+//            if (trgdict->freq(trg)>=10){
+//                for (int j=0;j<srclen;j++){
+//                    int src=srcdata->docword(s,j);
+//                    float freqratio=srcdict->freq(src)/trgdictfreq;
+//                    if (srcdict->freq(src)>=minfreq && freqratio <= 10 && freqratio >= 0.1){
+//                        table[trg][src]++;
+//                        totfreq++;
+//                        srcfreq[src]++;
+//                        trgfreq[trg]++;
+//                    }
+//                }
+//            }
+//        }
+//    }
+//    
+//    cerr << "computing mutual information\n";
+//    Friend mie; FriendList mivec;
+//    
+//    
+//    for (int i = 0; i < trgdict->size(); i++){
+//        
+//        int frac=(i * 1000)/trgdict->size();
+//        if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+//        
+//        mivec.clear();
+//        for (auto jtr = table[i].begin(); jtr !=  table[i].end();jtr++){
+//            int j=(*jtr).first; int freq=(*jtr).second;
+//            float freqratio=(float)srcdict->freq(j)/(float)trgdict->freq(i);
+//            if (freq>minfreq){  // && freqratio < 10 && freqratio > 0.1){
+//                //compute mutual information
+//                float mutualinfo=
+//                logf(freq/(float)trgfreq[i]) - log((float)srcfreq[j]/totfreq);
+//                mutualinfo/=log(2);
+//                mie.word=j; mie.score=mutualinfo;
+//                mivec.push_back(mie);
+//            }
+//        }
+//        if (mivec.size()>0){
+//            std::sort(mivec.begin(),mivec.end(),myrank);
+//            //sort the vector and take the top log(10)
+//            int count=0;
+//            for (auto jtr = mivec.begin(); jtr !=  mivec.end();jtr++){
+//                //int j=(*jtr).word; float mutualinfo=(*jtr).score;
+//                friends[i].push_back(*jtr);
+//                //cout << trgdict->decode(i) << " " << srcdict->decode(j) << " " << mutualinfo << endl;
+//                //if (++count >=50) break;
+//            }
+//            
+//        }
+//    }
+//    
+//    
+//}
+
+
+void cswam::findfriends(FriendList* friends){
+    
+    //target to source associative memory
+    typedef std::unordered_map<int,float> src_map;
+    src_map* prob= new src_map[trgdict->size()];
+    src_map* efcounts= new src_map[trgdict->size()];
+    float *ecounts=new float[trgdict->size()];
+    
+    int totfreq=0;
+    int minfreq=10;
+    float minprob=0.000001;
+    float probthreshold=0.005;
+    float pef=0;
+    int M1ITER=15;
+    
+    cerr << "initializing M1\n";
+    for (int s=0;s<srcdata->numdoc();s++){
+        int trglen=trgdata->doclen(s); // length of target sentence
+        int srclen=srcdata->doclen(s); //length of source sentence
+        
+        int frac=(s * 1000)/srcdata->numdoc();
+        if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+        
+        for (int j=0;j<srclen;j++){
+            int f=srcdata->docword(s,j);
+            if (srcdict->freq(f)>=minfreq){
+                for (int i=0;i<trglen;i++){
+                    int e=trgdata->docword(s,i);
+                    if (trgdict->freq(e)>=minfreq)
+                        prob[e][f]=1;
+                }
+            }
+        }
+    }
+    
+    cerr << "training M1\n";
+    for (int it=0;it<M1ITER;it++){
+        
+        //reset expected counts
+        for (int e = 0; e < trgdict->size(); e++){
+            efcounts[e].clear();
+            memset(ecounts,0,sizeof(int)*trgdict->size());
+        }
+        
+        //compute expected counts
+        for (int s=0;s<srcdata->numdoc();s++){
+            int trglen=trgdata->doclen(s); // length of target sentence
+            int srclen=srcdata->doclen(s); //length of source sentence
+            
+            int frac=(s * 1000)/srcdata->numdoc();
+            if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+            
+            for (int j=0;j<srclen;j++){
+                int f=srcdata->docword(s,j);
+                if (srcdict->freq(f)>=minfreq){
+                    float t=0;
+                    for (int i=0;i<trglen;i++){
+                        int e=trgdata->docword(s,i);
+                        if (trgdict->freq(e)>=minfreq)  //&& prob[e][f]>minprob)
+                            t+=prob[e][f];
+                    }
+                    for (int i=0;i<trglen;i++){
+                        int e=trgdata->docword(s,i);
+                        if (trgdict->freq(e)>=minfreq){ //&& prob[e][f] > minprob){
+                            pef=prob[e][f]/t;
+                            efcounts[e][f]+=pef;
+                            ecounts[e]+=pef;
+                        }
+                    }
+                }
+            }
+        }
+        
+        //update probabilities
+        for (int e = 0; e < trgdict->size(); e++)
+            for (auto jtr = efcounts[e].begin(); jtr != efcounts[e].end();jtr++){
+                int f=(*jtr).first;
+                prob[e][f]=efcounts[e][f]/ecounts[e];
+            }
+        cerr << ".";
+    }
+    
+    
+    cerr << "computing candidates\n";
+    Friend f;
+    
+    for (int e = 0; e < trgdict->size(); e++){
+        int frac=(e * 1000)/trgdict->size();
+        if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+        
+        for (auto jtr = prob[e].begin(); jtr !=  prob[e].end();jtr++){
+            f.word=(*jtr).first; f.score=(*jtr).second;
+            if (f.score>probthreshold){
+                friends[e].push_back(f);
+                cout << trgdict->decode(e) << " " << srcdict->decode(f.word) << " " << f.score << endl;
+            }
+        }
+        
+    }
+    
+    delete [] prob; delete [] efcounts; delete [] ecounts;
+  
+}
+
+
+
 
