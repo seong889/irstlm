@@ -1348,7 +1348,8 @@ void cswam::findfriends(FriendList* friends){
             f.word=(*jtr).first; f.score=(*jtr).second;
             if (f.score>probthreshold){
                 friends[e].push_back(f);
-                cout << trgdict->decode(e) << " " << srcdict->decode(f.word) << " " << f.score << endl;
+                if (verbosity)
+                cerr << trgdict->decode(e) << " " << srcdict->decode(f.word) << " " << f.score << endl;
             }
         }
         
