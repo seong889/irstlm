@@ -31,6 +31,7 @@ libirstlm_la_HEADERS = \
   normcache.h \
   shiftlm.h \
   cplsa.h \
+  cswam.h \
   doc.h
 
 libirstlm_la_SOURCES = \
@@ -58,6 +59,7 @@ libirstlm_la_SOURCES = \
   normcache.cpp \
   shiftlm.cpp \
   cplsa.cpp \
+  cswam.cpp \
   doc.cpp
 
 CLEANFILES = $(BUILT_SOURCES)
@@ -67,7 +69,7 @@ libirstlm_la_LIBADD = $(BOOST_LDFLAGS) $(BOOST_THREAD_LIB)
 LDADD = -lirstlm 
 DEPENDENCIES = libirstlm.la
 
-bin_PROGRAMS = dict ngt dtsel compile-lm interpolate-lm prune-lm quantize-lm prune-lm score-lm tlm plsa verify-caching
+bin_PROGRAMS = dict ngt dtsel compile-lm interpolate-lm prune-lm quantize-lm prune-lm score-lm tlm plsa verify-caching cswa
 
 dict_SOURCES = dict.cpp
 dict_DEPENDENCIES = $(DEPENDENCIES)
@@ -91,3 +93,5 @@ plsa_SOURCES = plsa.cpp
 plsa_DEPENDENCIES = $(DEPENDENCIES)
 verify_caching_SOURCES = verify-caching.cpp
 verify_caching_DEPENDENCIES = $(DEPENDENCIES)
+cswa_SOURCES = cswa.cpp
+cswa_DEPENDENCIES = $(DEPENDENCIES)
