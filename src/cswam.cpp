@@ -60,6 +60,10 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
     A=NULL;
     Den=NULL;
     friends=NULL;
+    efcounts=NULL;
+    ecounts=NULL;
+    loc_efcounts=NULL;
+    loc_ecounts=NULL;
     
     //setting
     normalize_vectors=normvect;
@@ -73,6 +77,9 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
     DistMean=DistVar=0;  //distortion mean and variance
     DistA=DistB=0;    //beta parameters
     NullProb=0;
+    
+    //set mininum word frequency to collect friends
+    minfreq=10;
     
     
     cout << "cswam configuration.\n";
@@ -560,8 +567,7 @@ void cswam::expected_counts(void *argv){
     
     long long s=(long long) argv;
     
-    int frac=(s * 1000)/srcdata->numdoc();
-     if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+    ShowProgress(s, srcdata->numdoc());
     
     int trglen=trgdata->doclen(s); // length of target sentence
     int srclen=srcdata->doclen(s); //length of source sentence
@@ -626,8 +632,7 @@ void cswam::maximization(void *argv){
     
     long long d=(long long) argv;
     
-    int frac=(d * 1000)/D;
-    if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+    ShowProgress(d,D);
 
     if (d==D){
         //this thread is to maximize the global distortion model
@@ -879,7 +884,6 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
     task *t=new task[numtasks];
     assert(numtasks>D); //multi-threading also distributed over D
     
-    threadpool thpool1=thpool_init(1);
     
     //support variable to compute likelihood
     localLL=new float[srcdata->numdoc()];
@@ -1254,19 +1258,120 @@ bool myrank (Friend a,Friend b) { return (a.score > b.score ); }
 //}
 
 
-void cswam::findfriends(FriendList* friends){
-    
-    //target to source associative memory
-    typedef std::unordered_map<int,float> src_map;
-    src_map* prob= new src_map[trgdict->size()];
-    src_map* efcounts= new src_map[trgdict->size()];
-    float *ecounts=new float[trgdict->size()];
-    
-    int totfreq=0;
-    int minfreq=10;
-    float minprob=0.000001;
-    float probthreshold=0.005;
+
+void cswam::M1_ecounts(void *argv){
+    long long s=(long long) argv;
+
+    int b=s % BUCKET; //value of the actual bucket
+    int trglen=trgdata->doclen(s); // length of target sentence
+    int srclen=srcdata->doclen(s); //length of source sentence
     float pef=0;
+    
+    ShowProgress(s,srcdata->numdoc());
+    
+    for (int j=0;j<srclen;j++){
+        int f=srcdata->docword(s,j);
+        if (srcdict->freq(f)>=minfreq){
+            float t=0;
+            for (int i=0;i<trglen;i++){
+                int e=trgdata->docword(s,i);
+                if (trgdict->freq(e)>=minfreq)  //&& prob[e][f]>minprob)
+                    t+=prob[e][f];
+            }
+            for (int i=0;i<trglen;i++){
+                int e=trgdata->docword(s,i);
+                if (trgdict->freq(e)>=minfreq){ //&& prob[e][f] > minprob){
+                    pef=prob[e][f]/t;
+                    loc_efcounts[b][e][f]+=pef;
+                    loc_ecounts[b][e]+=pef;
+                }
+            }
+        }
+    }
+    
+}
+
+
+void cswam::M1_update(void *argv){
+    long long e=(long long) argv;
+    
+    ShowProgress(e,trgdict->size());
+    
+    
+    for (auto jtr = efcounts[e].begin(); jtr != efcounts[e].end();jtr++){
+        int f=(*jtr).first;
+        prob[e][f]=efcounts[e][f]/ecounts[e];
+    }
+}
+
+void cswam::M1_collect(void *argv){
+    long long e=(long long) argv;
+
+    ShowProgress(e,trgdict->size());   
+    
+    for (int b=0;b<BUCKET;b++){
+        ecounts[e]+=loc_ecounts[b][e];
+        loc_ecounts[b][e]=0; //reset local count
+        for (auto jtr = loc_efcounts[b][e].begin(); jtr != loc_efcounts[b][e].end();jtr++){
+            int f=(*jtr).first;
+            efcounts[e][f]+=loc_efcounts[b][e][f];
+        }
+        loc_efcounts[b][e].clear(); //reset local counts
+    }
+}
+
+
+void cswam::M1_clearcounts(bool clearmem){
+
+    if (efcounts==NULL){
+        cerr << "allocating loc structures\n";
+        //allocate thread safe structures
+        loc_efcounts=new src_map*[BUCKET];
+        loc_ecounts=new float*[BUCKET];
+        for (int b=0;b<BUCKET;b++){
+            loc_efcounts[b]=new src_map[trgdict->size()];
+            loc_ecounts[b]=new float[trgdict->size()];
+        }
+        cerr << "allocating count structures\n";
+        //allocate the global count structures
+        efcounts=new src_map[trgdict->size()];
+        ecounts=new float[trgdict->size()];
+    }
+    
+    
+    if (clearmem){
+        for (int b=0;b<BUCKET;b++){
+            delete [] loc_efcounts[b];
+            delete [] loc_ecounts[b];
+        }
+        delete [] loc_efcounts; delete [] loc_ecounts;
+        delete [] efcounts; delete [] ecounts;
+    }else{
+       // cerr << "resetting expected counts\n";
+        for (int e = 0; e < trgdict->size(); e++){
+            efcounts[e].clear();
+            memset(ecounts,0,sizeof(int)*trgdict->size());
+        }
+        //local expected counts are reset in main loop
+    }
+
+}
+
+
+void cswam::findfriends(FriendList* friends){
+           
+    //allocate the global prob table
+    prob= new src_map[trgdict->size()];
+    
+    //allocate thread safe structures
+    M1_clearcounts(false);
+    
+    //prepare thread pool
+    threadpool thpool=thpool_init(threads);
+    task *t=new task[trgdict->size()>BUCKET?trgdict->size():BUCKET];
+    
+    
+    float minprob=0.000001;
     int M1ITER=15;
     
     cerr << "initializing M1\n";
@@ -1292,71 +1397,71 @@ void cswam::findfriends(FriendList* friends){
     cerr << "training M1\n";
     for (int it=0;it<M1ITER;it++){
         
-        //reset expected counts
-        for (int e = 0; e < trgdict->size(); e++){
-            efcounts[e].clear();
-            memset(ecounts,0,sizeof(int)*trgdict->size());
-        }
+        cerr << "it: " << it+1;
+        M1_clearcounts(false);
         
         //compute expected counts
-        for (int s=0;s<srcdata->numdoc();s++){
-            int trglen=trgdata->doclen(s); // length of target sentence
-            int srclen=srcdata->doclen(s); //length of source sentence
+        for (long long s=0;s<srcdata->numdoc();s++){
             
-            int frac=(s * 1000)/srcdata->numdoc();
-            if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+            t[s % BUCKET].ctx=this; t[s % BUCKET].argv=(void *)s;
+            thpool_add_work(thpool, &cswam::M1_ecounts_helper,(void *)&t[s % BUCKET]);
             
-            for (int j=0;j<srclen;j++){
-                int f=srcdata->docword(s,j);
-                if (srcdict->freq(f)>=minfreq){
-                    float t=0;
-                    for (int i=0;i<trglen;i++){
-                        int e=trgdata->docword(s,i);
-                        if (trgdict->freq(e)>=minfreq)  //&& prob[e][f]>minprob)
-                            t+=prob[e][f];
-                    }
-                    for (int i=0;i<trglen;i++){
-                        int e=trgdata->docword(s,i);
-                        if (trgdict->freq(e)>=minfreq){ //&& prob[e][f] > minprob){
-                            pef=prob[e][f]/t;
-                            efcounts[e][f]+=pef;
-                            ecounts[e]+=pef;
-                        }
-                    }
-                }
-            }
+            if (((s % BUCKET) == (BUCKET-1)) || (s==(srcdata->numdoc()-1)))
+                thpool_wait(thpool);//join all threads
         }
+        
+        //update the global counts
+        for (long long e = 0; e < trgdict->size(); e++){
+                t[e].ctx=this; t[e].argv=(void *)e;
+                thpool_add_work(thpool, &cswam::M1_collect_helper,(void *)&t[e]);
+        }
+        thpool_wait(thpool);//join all threads
         
         //update probabilities
-        for (int e = 0; e < trgdict->size(); e++)
-            for (auto jtr = efcounts[e].begin(); jtr != efcounts[e].end();jtr++){
-                int f=(*jtr).first;
-                prob[e][f]=efcounts[e][f]/ecounts[e];
-            }
-        cerr << ".";
-    }
-    
-    
-    cerr << "computing candidates\n";
-    Friend f;
-    
-    for (int e = 0; e < trgdict->size(); e++){
-        int frac=(e * 1000)/trgdict->size();
-        if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
-        
-        for (auto jtr = prob[e].begin(); jtr !=  prob[e].end();jtr++){
-            f.word=(*jtr).first; f.score=(*jtr).second;
-            if (f.score>probthreshold){
-                friends[e].push_back(f);
-                if (verbosity)
-                cerr << trgdict->decode(e) << " " << srcdict->decode(f.word) << " " << f.score << endl;
-            }
+        for (long long e = 0; e < trgdict->size(); e++){
+            t[e].ctx=this; t[e].argv=(void *)e;
+            thpool_add_work(thpool, &cswam::M1_update_helper,(void *)&t[e]);
         }
         
+        thpool_wait(thpool); //join all threads
+        
     }
     
-    delete [] prob; delete [] efcounts; delete [] ecounts;
-  
+    cerr << "computing candidates\n";
+    Friend f;FriendList fv;
+    
+    for (int e = 0; e < trgdict->size(); e++){
+        
+        ShowProgress(e,trgdict->size());
+     
+        fv.clear();
+        //save in a vector and compute entropy
+        float H=0;
+        for (auto jtr = prob[e].begin(); jtr !=  prob[e].end();jtr++){
+            f.word=(*jtr).first; f.score=(*jtr).second;
+            H-=f.score * logf(f.score);
+            if (f.score>minprob) fv.push_back(f);
+        }
+        
+        std::sort(fv.begin(),fv.end(),myrank);
+        int PP=round(expf(H)); //compute perplexity
+        int count=0;
+        for (auto jtr = fv.begin(); jtr !=  fv.end();jtr++){
+            friends[e].push_back(f);
+            //if (verbosity)
+            cerr << trgdict->decode(e) << " " << srcdict->decode(f.word) << " " << f.score << endl;
+            if (++count >= PP) break;
+        }
+    }
+    
+    //destroy thread pool
+    thpool_destroy(thpool); delete [] t;
+    
+    M1_clearcounts(true);
+    
+    delete [] prob;
+    
+    
 }
 
 

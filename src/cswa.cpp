@@ -77,7 +77,7 @@ int main(int argc, char **argv){
     bool help=false;
     int prunethreshold=3;
     bool trainvar=true;
-    bool normvectors=true;
+    bool normvectors=false;
     bool usenullword=true;
     double fixnullprob=0;
     bool verbosity=false;

@@ -20,6 +20,7 @@
 #ifndef MF_CSWAM_H
 #define MF_CSWAM_H
 
+#include <unordered_map>
 #include <vector>
 
 typedef struct{
@@ -44,6 +45,7 @@ typedef struct{
 } Friend;
 
 typedef std::vector<Friend> FriendList; //list of word Friends
+typedef std::unordered_map<int,float> src_map; //target to source associative memory
 
 class cswam {
     
@@ -57,6 +59,7 @@ class cswam {
     //word2vec
     float     **W2V;   //vector for each source word
     int       D;       //dimension of vector space
+    
     
     //model
     TransModel *TM;
@@ -74,14 +77,15 @@ class cswam {
     bool distortion_mean;
     bool distortion_var;
     bool use_beta_distortion;
-
+    int minfreq;
+    
     //private info shared among threads
     int trgBoD;        //code of segment begin in target dict
     int trgEoD;        //code of segment end in target dict
     int srcBoD;        //code of segment begin in src dict
     int srcEoD;        //code of segment end in src dict
-
-    float ****A;       //expected counts    
+    
+    float ****A;       //expected counts
     float **Den;       //alignment probs
     float *localLL;    //local log-likelihood
     int **alignments;  //word alignment info
@@ -89,17 +93,26 @@ class cswam {
     int bucket;        //size of bucket
     int iter;          //current iteration
     
+    
+    //Model 1 initialization private variables
+   
+    src_map* prob;  //model one probabilities
+    src_map** loc_efcounts;  //expected count probabilities
+    float **loc_ecounts;     //expected count probabilities
+    src_map* efcounts;  //expected count probabilities
+    float *ecounts;     //expected count probabilities
+    
     struct task {      //basic task info to run task
         void *ctx;
         void *argv;
     };
-
+    
     
 public:
     
     cswam(char* srcdatafile,char* trgdatafile, char* word2vecfile,
           bool usenull,double fix_null_prob,
-          bool normv2w, 
+          bool normv2w,
           bool trainvar,float minvar,
           bool distbeta, bool distmean,bool distvar,
           bool verbose);
@@ -119,11 +132,11 @@ public:
     
     
     float LogGauss(const int dim,const float* x,const float *m, const float *s);
-
+    
     float LogDistortion(float d);
     float LogBeta(float x,  float a,  float b);
     void EstimateBeta(float &a, float &b,  float m,  float s);
-
+    
     float Delta( int i, int j, int l=1, int m=1);
     
     void expected_counts(void *argv);
@@ -131,13 +144,13 @@ public:
         task t=*(task *)argv;
         ((cswam *)t.ctx)->expected_counts(t.argv);return NULL;
     };
-
+    
     void maximization(void *argv);
     static void *maximization_helper(void *argv){
         task t=*(task *)argv;
         ((cswam *)t.ctx)->maximization(t.argv);return NULL;
     };
-
+    
     void expansion(void *argv);
     static void *expansion_helper(void *argv){
         task t=*(task *)argv;
@@ -149,8 +162,32 @@ public:
         task t=*(task *)argv;
         ((cswam *)t.ctx)->contraction(t.argv);return NULL;
     };
+    
+    
+    void M1_ecounts(void *argv);
+    static void *M1_ecounts_helper(void *argv){
+        task t=*(task *)argv;
+        ((cswam *)t.ctx)->M1_ecounts(t.argv);return NULL;
+    }
    
+    void M1_collect(void *argv);
+    static void *M1_collect_helper(void *argv){
+        task t=*(task *)argv;
+        ((cswam *)t.ctx)->M1_collect(t.argv);return NULL;
+    }
+    
+    void M1_update(void *argv);
+    static void *M1_update_helper(void *argv){
+        task t=*(task *)argv;
+        ((cswam *)t.ctx)->M1_update(t.argv);return NULL;
+    }
+    
+    void M1_clearcounts(bool clearmem=false);
+        
     void findfriends(FriendList* friends);
+    
+    
+    
     int train(char *srctrainfile,char *trgtrainfile,char* modelfile, int maxiter,int threads=1);
     
     void aligner(void *argv);
@@ -159,7 +196,7 @@ public:
         ((cswam *)t.ctx)->aligner(t.argv);return NULL;
     };
     
-
+    
     int test(char *srctestfile, char* trgtestfile, char* modelfile,char* alignmentfile, int threads=1);
     
 };

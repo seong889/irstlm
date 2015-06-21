@@ -60,16 +60,15 @@ void ResetUserTime();
 void PrintUserTime(const std::string &message);
 double GetUserTime();
 
+void ShowProgress(long long current,long long total);
 
 int parseWords(char *, const char **, int);
 int parseline(istream& inp, int Order,ngram& ng,float& prob,float& bow);
 
 void exit_error(int err, const std::string &msg="");
 
-namespace irstlm
-{
+namespace irstlm{
 	void* reallocf(void *ptr, size_t size);
-
 }
 
 //extern int tracelevel;
