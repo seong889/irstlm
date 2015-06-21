@@ -206,6 +206,12 @@ double GetUserTime()
 }
 
 
+void ShowProgress(long long current, long long target){
+    
+    int frac=(current * 1000)/target;
+    if (!(frac % 10)) fprintf(stderr,"%02d\b\b",frac/10);
+
+}
 
 
 int parseWords(char *sentence, const char **words, int max)
