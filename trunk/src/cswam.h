@@ -92,7 +92,7 @@ class cswam {
     int threads;       //number of threads
     int bucket;        //size of bucket
     int iter;          //current iteration
-    
+    int M1iter;        //iterations with model 1
     
     //Model 1 initialization private variables
    
@@ -113,6 +113,7 @@ public:
     cswam(char* srcdatafile,char* trgdatafile, char* word2vecfile,
           bool usenull,double fix_null_prob,
           bool normv2w,
+          int model1iter,
           bool trainvar,float minvar,
           bool distbeta, bool distmean,bool distvar,
           bool verbose);

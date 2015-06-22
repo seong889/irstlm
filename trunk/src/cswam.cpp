@@ -50,6 +50,7 @@ using namespace std;
 cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
              bool usenull,double fixnullprob,
              bool normvect,
+             int model1iter,
              bool trainvar,float minvar,
              bool distbeta,bool distmean,bool distvar,
              bool verbose){
@@ -77,6 +78,7 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
     DistMean=DistVar=0;  //distortion mean and variance
     DistA=DistB=0;    //beta parameters
     NullProb=0;
+    M1iter=model1iter;
     
     //set mininum word frequency to collect friends
     minfreq=10;
@@ -1124,23 +1126,23 @@ int cswam::test(char *srctestfile, char *trgtestfile, char* modelfile, char* ali
         alignments[s]=new int[MAX_LINE];
     
     threadpool thpool=thpool_init(threads);
-    task *t=new task[bucket];
+    task *t=new task[BUCKET];
     
     cerr << "Start alignment\n";
     
     for (long long s=0;s<srcdata->numdoc();s++){
         
-        t[s % bucket].ctx=this; t[s % bucket].argv=(void *)s;
-        thpool_add_work(thpool, &cswam::aligner_helper, (void *)&t[s % bucket]);
+        t[s % BUCKET].ctx=this; t[s % BUCKET].argv=(void *)s;
+        thpool_add_work(thpool, &cswam::aligner_helper, (void *)&t[s % BUCKET]);
         
 
-        if (((s % bucket) == (bucket-1)) || (s==(srcdata->numdoc()-1)) ){
+        if (((s % BUCKET) == (BUCKET-1)) || (s==(srcdata->numdoc()-1)) ){
             //join all threads
             thpool_wait(thpool);
             
             //cerr << "Start printing\n";
             
-            if ((s % bucket) != (bucket-1))
+            if ((s % BUCKET) != (BUCKET-1))
                     bucket=srcdata->numdoc() % bucket; //last bucket at end of file
             
                 mfstream out(alignfile,ios::out | ios::app);
@@ -1262,7 +1264,7 @@ bool myrank (Friend a,Friend b) { return (a.score > b.score ); }
 void cswam::M1_ecounts(void *argv){
     long long s=(long long) argv;
 
-    int b=s % BUCKET; //value of the actual bucket
+    int b=s % threads; //value of the actual bucket
     int trglen=trgdata->doclen(s); // length of target sentence
     int srclen=srcdata->doclen(s); //length of source sentence
     float pef=0;
@@ -1307,9 +1309,9 @@ void cswam::M1_update(void *argv){
 void cswam::M1_collect(void *argv){
     long long e=(long long) argv;
 
-    ShowProgress(e,trgdict->size());   
+    ShowProgress(e,trgdict->size());
     
-    for (int b=0;b<BUCKET;b++){
+    for (int b=0;b<threads;b++){
         ecounts[e]+=loc_ecounts[b][e];
         loc_ecounts[b][e]=0; //reset local count
         for (auto jtr = loc_efcounts[b][e].begin(); jtr != loc_efcounts[b][e].end();jtr++){
@@ -1324,15 +1326,15 @@ void cswam::M1_collect(void *argv){
 void cswam::M1_clearcounts(bool clearmem){
 
     if (efcounts==NULL){
-        cerr << "allocating loc structures\n";
+        cerr << "allocating thread local structures\n";
         //allocate thread safe structures
-        loc_efcounts=new src_map*[BUCKET];
-        loc_ecounts=new float*[BUCKET];
-        for (int b=0;b<BUCKET;b++){
+        loc_efcounts=new src_map*[threads];
+        loc_ecounts=new float*[threads];
+        for (int b=0;b<threads;b++){
             loc_efcounts[b]=new src_map[trgdict->size()];
             loc_ecounts[b]=new float[trgdict->size()];
         }
-        cerr << "allocating count structures\n";
+        cerr << "allocating global count structures\n";
         //allocate the global count structures
         efcounts=new src_map[trgdict->size()];
         ecounts=new float[trgdict->size()];
@@ -1340,7 +1342,7 @@ void cswam::M1_clearcounts(bool clearmem){
     
     
     if (clearmem){
-        for (int b=0;b<BUCKET;b++){
+        for (int b=0;b<threads;b++){
             delete [] loc_efcounts[b];
             delete [] loc_ecounts[b];
         }
@@ -1368,11 +1370,9 @@ void cswam::findfriends(FriendList* friends){
     
     //prepare thread pool
     threadpool thpool=thpool_init(threads);
-    task *t=new task[trgdict->size()>BUCKET?trgdict->size():BUCKET];
-    
+    task *t=new task[trgdict->size()>threads?trgdict->size():threads];
     
     float minprob=0.000001;
-    int M1ITER=15;
     
     cerr << "initializing M1\n";
     for (int s=0;s<srcdata->numdoc();s++){
@@ -1395,7 +1395,7 @@ void cswam::findfriends(FriendList* friends){
     }
     
     cerr << "training M1\n";
-    for (int it=0;it<M1ITER;it++){
+    for (int it=0;it<M1iter;it++){
         
         cerr << "it: " << it+1;
         M1_clearcounts(false);
@@ -1403,10 +1403,10 @@ void cswam::findfriends(FriendList* friends){
         //compute expected counts
         for (long long s=0;s<srcdata->numdoc();s++){
             
-            t[s % BUCKET].ctx=this; t[s % BUCKET].argv=(void *)s;
-            thpool_add_work(thpool, &cswam::M1_ecounts_helper,(void *)&t[s % BUCKET]);
+            t[s % threads].ctx=this; t[s % threads].argv=(void *)s;
+            thpool_add_work(thpool, &cswam::M1_ecounts_helper,(void *)&t[s % threads]);
             
-            if (((s % BUCKET) == (BUCKET-1)) || (s==(srcdata->numdoc()-1)))
+            if (((s % threads) == (threads-1)) || (s==(srcdata->numdoc()-1)))
                 thpool_wait(thpool);//join all threads
         }
         
@@ -1440,16 +1440,18 @@ void cswam::findfriends(FriendList* friends){
         for (auto jtr = prob[e].begin(); jtr !=  prob[e].end();jtr++){
             f.word=(*jtr).first; f.score=(*jtr).second;
             H-=f.score * logf(f.score);
-            if (f.score>minprob) fv.push_back(f);
+            if (f.score > minprob) fv.push_back(f);
         }
         
         std::sort(fv.begin(),fv.end(),myrank);
         int PP=round(expf(H)); //compute perplexity
-        int count=0;
+
+        cout << trgdict->decode(e) << " # friends: " << fv.size() << " PP " << PP << endl;
+               int count=0;
         for (auto jtr = fv.begin(); jtr !=  fv.end();jtr++){
-            friends[e].push_back(f);
+            friends[e].push_back(*jtr);
             //if (verbosity)
-            cerr << trgdict->decode(e) << " " << srcdict->decode(f.word) << " " << f.score << endl;
+            cout << trgdict->decode(e) << " " << srcdict->decode((*jtr).word) << " " << (*jtr).score << endl;
             if (++count >= PP) break;
         }
     }

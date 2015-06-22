@@ -85,6 +85,7 @@ int main(int argc, char **argv){
     bool distmean=true;
     bool distvar=true;
     bool distbeta=false;
+    int  model1iter=7;
     
     DeclareParams((char*)
                   
@@ -140,6 +141,9 @@ int main(int argc, char **argv){
                   "TxtModel", CMDSTRINGTYPE|CMDMSG, &modeltxtfile, "<fname> : model in textual form",
                   "txt", CMDSTRINGTYPE|CMDMSG, &modeltxtfile, "<fname> : model in readable form",
 
+                  "M1iter", CMDINTTYPE|CMDMSG, &model1iter, "<count>: number of itereations with model 1 (default 7)",
+                  "m1", CMDINTTYPE|CMDMSG, &model1iter, "<count>: number of itereations with model 1 (default 7)",
+
                   
                   "Verbosity", CMDBOOLTYPE|CMDMSG, &verbosity, "verbose output",
                   "v", CMDBOOLTYPE|CMDMSG, &verbosity, "verbose output",
@@ -179,6 +183,7 @@ int main(int argc, char **argv){
     cswam *model=new cswam(srcdatafile,trgdatafile,w2vfile,
                            usenullword,fixnullprob,
                            normvectors,
+                           model1iter,
                            trainvar,minvar,
                            distbeta, distmean,distvar,
                            verbosity);
