@@ -74,6 +74,7 @@ class cswam {
     bool use_null_word;
     bool verbosity;
     float min_variance;
+    int distortion_window;
     bool distortion_mean;
     bool distortion_var;
     bool use_beta_distortion;
@@ -115,7 +116,7 @@ public:
           bool normv2w,
           int model1iter,
           bool trainvar,float minvar,
-          bool distbeta, bool distmean,bool distvar,
+          int distwin,bool distbeta, bool distmean,bool distvar,
           bool verbose);
     
     ~cswam();
