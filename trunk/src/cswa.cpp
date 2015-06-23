@@ -82,10 +82,11 @@ int main(int argc, char **argv){
     double fixnullprob=0;
     bool verbosity=false;
     double minvar=0.2;
-    bool distmean=true;
-    bool distvar=true;
+    bool distmean=false;
+    bool distvar=false;
     bool distbeta=false;
     int  model1iter=7;
+    int  distwin=8;
     
     DeclareParams((char*)
                   
@@ -141,9 +142,11 @@ int main(int argc, char **argv){
                   "TxtModel", CMDSTRINGTYPE|CMDMSG, &modeltxtfile, "<fname> : model in textual form",
                   "txt", CMDSTRINGTYPE|CMDMSG, &modeltxtfile, "<fname> : model in readable form",
 
+                  "DistWin", CMDINTTYPE|CMDMSG, &distwin, "<count>: distortion window (default 8)",
+                  "dw", CMDINTTYPE|CMDMSG, &distwin, "<count>: distortion window (default 8)",
+
                   "M1iter", CMDINTTYPE|CMDMSG, &model1iter, "<count>: number of itereations with model 1 (default 7)",
                   "m1", CMDINTTYPE|CMDMSG, &model1iter, "<count>: number of itereations with model 1 (default 7)",
-
                   
                   "Verbosity", CMDBOOLTYPE|CMDMSG, &verbosity, "verbose output",
                   "v", CMDBOOLTYPE|CMDMSG, &verbosity, "verbose output",
@@ -185,7 +188,7 @@ int main(int argc, char **argv){
                            normvectors,
                            model1iter,
                            trainvar,minvar,
-                           distbeta, distmean,distvar,
+                           distwin,distbeta, distmean,distvar,
                            verbosity);
     
     ngramtable* friends;

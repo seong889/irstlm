@@ -40,6 +40,7 @@
 #include <vector>
 #include "cswam.h"
 
+
 #define BUCKET 1000
 #define SSEED 50
 
@@ -52,7 +53,7 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
              bool normvect,
              int model1iter,
              bool trainvar,float minvar,
-             bool distbeta,bool distmean,bool distvar,
+             int distwin,bool distbeta,bool distmean,bool distvar,
              bool verbose){
     
     //actual model structure
@@ -71,6 +72,7 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
     train_variances=trainvar;
     use_null_word=usenull;
     min_variance=minvar;
+    distortion_window=distwin;
     distortion_mean=distmean;
     distortion_var=distvar;
     use_beta_distortion=distbeta;
@@ -88,7 +90,7 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
     cout << "Vectors:  normalize [" << normalize_vectors << "] \n";
     cout << "Gaussian Variances: train [" << train_variances << "] min [" << min_variance << "] initial [" << min_variance * SSEED << "]\n";
     cout << "Null word: active [" << use_null_word << "] fix_null_prob [" << fix_null_prob << "]\n";
-    cout << "Distortion model: use beta [" << use_beta_distortion << "] update mean [" << distortion_mean << "] update variance [" << distortion_var << "]\n";
+    cout << "Distortion model: window [" << distortion_window << "] use beta [" << use_beta_distortion << "] update mean [" << distortion_mean << "] update variance [" << distortion_var << "]\n";
     
     
     srandom(100); //ensure repicable generation of random numbers
@@ -237,7 +239,7 @@ void cswam::initEntry(int e){
     
     //allocate a suitable number of gaussians
     
-    TM[e].n=(friends[e].size()?friends[e].size():1);
+    TM[e].n=(friends && friends[e].size()?friends[e].size():1);
   
     assert(TM[e].n>0);
     TM[e].G=new Gaussian [TM[e].n];TM[e].W=new float[TM[e].n];
@@ -251,7 +253,7 @@ void cswam::initEntry(int e){
         
         TM[e].W[n]=1.0/(float)TM[e].n;
         
-        if (friends[e].size()){
+        if (friends && friends[e].size()){
             int f=friends[e][n].word; //initialize with source vector
             memcpy(TM[e].G[n].M,W2V[f],sizeof(float) * D);
         }
@@ -584,42 +586,44 @@ void cswam::expected_counts(void *argv){
         //global_j=j;
         //cout << "j: " << srcdict->decode(srcdata->docword(s,j)) << "\n";
         den=0;
-        for (int i=0;i<trglen;i++){
-            delta=Delta(i,j,trglen,srclen);
-            for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
-                assert(TM[trgdata->docword(s,i)].W[n]>0); //weight zero must be prevented!!!
-                //global_i=i;
-                A[s][i][n][j]=LogGauss(D, W2V[srcdata->docword(s,j)],
-                                       TM[trgdata->docword(s,i)].G[n].M,
-                                       TM[trgdata->docword(s,i)].G[n].S)
-                +log(TM[trgdata->docword(s,i)].W[n])
-                +(i>0 || !use_null_word ?logf(1-NullProb):logf(NullProb))
-                +(i>0 || !use_null_word ?LogDistortion(delta):0);
-                
-                if (i==0 && n==0) //den must be initialized
-                    den=A[s][i][n][j];
-                else
-                    den=logsum(den,A[s][i][n][j]);
+        for (int i=0;i<trglen;i++)
+            if ((use_null_word && i==0) || abs(i-j-1) <= distortion_window){
+                delta=Delta(i,j,trglen,srclen);
+                for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
+                    assert(TM[trgdata->docword(s,i)].W[n]>0); //weight zero must be prevented!!!
+                    //global_i=i;
+                    A[s][i][n][j]=LogGauss(D, W2V[srcdata->docword(s,j)],
+                                           TM[trgdata->docword(s,i)].G[n].M,
+                                           TM[trgdata->docword(s,i)].G[n].S)
+                    +log(TM[trgdata->docword(s,i)].W[n])
+                    +(i>0 || !use_null_word ?logf(1-NullProb):logf(NullProb))
+                    +(i>0 || !use_null_word ?LogDistortion(delta):0);
+                    
+                    if (i==0 && n==0) //den must be initialized
+                        den=A[s][i][n][j];
+                    else
+                        den=logsum(den,A[s][i][n][j]);
+                }
             }
-        }
         //update local likelihood
         localLL[s]+=den;
         
         for (int i=0;i<trglen;i++)
-            for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
-                
-                assert(A[s][i][n][j]<= den);
-                
-                A[s][i][n][j]=expf(A[s][i][n][j]-den); // A is now a regular expected count
-                
-                if (A[s][i][n][j]<0.000000001) A[s][i][n][j]=0; //take mall risk of wrong normalization
-                
-                if (A[s][i][n][j]>0) TM[trgdata->docword(s,i)].G[n].eC++; //increase support set size
-                
-            }
+            if ((use_null_word && i==0) || abs(i-j-1) <= distortion_window)
+                for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
+                    
+                    assert(A[s][i][n][j]<= den);
+                    
+                    A[s][i][n][j]=expf(A[s][i][n][j]-den); // A is now a regular expected count
+                    
+                    if (A[s][i][n][j]<0.000000001) A[s][i][n][j]=0; //take mall risk of wrong normalization
+                    
+                    if (A[s][i][n][j]>0) TM[trgdata->docword(s,i)].G[n].eC++; //increase support set size
+                    
+                }
     }
     
-   
+    
     
 }
 
@@ -635,7 +639,7 @@ void cswam::maximization(void *argv){
     long long d=(long long) argv;
     
     ShowProgress(d,D);
-
+    
     if (d==D){
         //this thread is to maximize the global distortion model
         //Maximization step: Mean and variance of distortion model
@@ -643,25 +647,27 @@ void cswam::maximization(void *argv){
         //Mean
         
         double totwdist=0, totdistprob=0, totnullprob=0, delta=0;
-        for (int s=0;s<srcdata->numdoc();s++)
-            for (int i=0;i<trgdata->doclen(s);i++)
-                for (int j=0;j<srcdata->doclen(s);j++){
-                    delta=Delta(i,j,trgdata->doclen(s),srcdata->doclen(s));
-                    for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
-                        if (A[s][i][n][j]>0){
-                            if (i>0 || !use_null_word){
-                                totwdist+=A[s][i][n][j]*delta;
-                                totdistprob+=A[s][i][n][j];
+        for (int s=0;s<srcdata->numdoc();s++){
+            for (int j=0;j<srcdata->doclen(s);j++)
+                for (int i=0;i<trgdata->doclen(s);i++)
+                    if ((use_null_word && i==0) || abs(i-j-1) <= distortion_window){
+                        delta=Delta(i,j,trgdata->doclen(s),srcdata->doclen(s));
+                        for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
+                            if (A[s][i][n][j]>0){
+                                if (i>0 || !use_null_word){
+                                    totwdist+=A[s][i][n][j]*delta;
+                                    totdistprob+=A[s][i][n][j];
+                                }
+                                else{
+                                    totnullprob+=A[s][i][n][j];
+                                }
                             }
-                            else{
-                                totnullprob+=A[s][i][n][j];
-                            }
-                        }
-                }
+                    }
+        }
         
         if (use_null_word && fix_null_prob==0)
             NullProb=(float)totnullprob/(totdistprob+totnullprob);
-
+        
         if (distortion_mean && iter >0) //then update the mean
             DistMean=totwdist/totdistprob;
         
@@ -671,22 +677,23 @@ void cswam::maximization(void *argv){
             double  totwdeltadist=0;
             for (int s=0;s<srcdata->numdoc();s++)
                 for (int i=1;i<trgdata->doclen(s);i++) //exclude i=0!
-                    for (int j=0;j<srcdata->doclen(s);j++){
-                        delta=Delta(i,j,trgdata->doclen(s),srcdata->doclen(s));
-                        for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
-                            if (A[s][i][n][j]>0)
-                                totwdeltadist+=A[s][i][n][j] * (delta-DistMean) * (delta-DistMean);
-                        
-                    }
+                    for (int j=0;j<srcdata->doclen(s);j++)
+                        if (abs(i-j-1) <= distortion_window){
+                            delta=Delta(i,j,trgdata->doclen(s),srcdata->doclen(s));
+                            for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
+                                if (A[s][i][n][j]>0)
+                                    totwdeltadist+=A[s][i][n][j] * (delta-DistMean) * (delta-DistMean);
+                            
+                        }
             
             DistVar=totwdeltadist/totdistprob;
         }
-       
+        
         cerr << "Dist: " << DistMean << " " << DistVar << "\n";
-
+        
         if (use_null_word)
             cerr << "NullProb: " << NullProb << "\n";
-
+        
         if (use_beta_distortion){
             cerr << "Beta A: " << DistA << " Beta B: " << DistB << "\n";
             EstimateBeta(DistA,DistB,DistMean,DistVar);
@@ -696,11 +703,12 @@ void cswam::maximization(void *argv){
     else{
         //Maximization step: Mean;
         for (int s=0;s<srcdata->numdoc();s++)
-            for (int i=0;i<trgdata->doclen(s);i++)
-                for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
-                    for (int j=0;j<srcdata->doclen(s);j++)
-                        if (A[s][i][n][j]>0)
-                            TM[trgdata->docword(s,i)].G[n].M[d]+=A[s][i][n][j] * W2V[srcdata->docword(s,j)][d];
+            for (int j=0;j<srcdata->doclen(s);j++)
+                for (int i=0;i<trgdata->doclen(s);i++)
+                    if ((use_null_word && i==0) || abs(i-j-1) <= distortion_window)
+                        for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
+                            if (A[s][i][n][j]>0)
+                                TM[trgdata->docword(s,i)].G[n].M[d]+=A[s][i][n][j] * W2V[srcdata->docword(s,j)][d];
         
         //second pass
         for (int e=0;e<trgdict->size();e++)
@@ -712,15 +720,16 @@ void cswam::maximization(void *argv){
             //Maximization step: Variance;
             
             for (int s=0;s<srcdata->numdoc();s++)
-                for (int i=0;i<trgdata->doclen(s);i++)
-                    for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
-                        for (int j=0;j<srcdata->doclen(s);j++)
-                            if (A[s][i][n][j]>0)
-                                TM[trgdata->docword(s,i)].G[n].S[d]+=
-                                (A[s][i][n][j] *
-                                 (W2V[srcdata->docword(s,j)][d]-TM[trgdata->docword(s,i)].G[n].M[d]) *
-                                 (W2V[srcdata->docword(s,j)][d]-TM[trgdata->docword(s,i)].G[n].M[d])
-                                 );
+                for (int j=0;j<srcdata->doclen(s);j++)
+                    for (int i=0;i<trgdata->doclen(s);i++)
+                        if ((use_null_word && i==0) || abs(i-j-1) <= distortion_window)
+                            for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
+                                if (A[s][i][n][j]>0)
+                                    TM[trgdata->docword(s,i)].G[n].S[d]+=
+                                    (A[s][i][n][j] *
+                                     (W2V[srcdata->docword(s,j)][d]-TM[trgdata->docword(s,i)].G[n].M[d]) *
+                                     (W2V[srcdata->docword(s,j)][d]-TM[trgdata->docword(s,i)].G[n].M[d])
+                                     );
             
             //second pass
             for (int e=0;e<trgdict->size();e++)
@@ -1043,48 +1052,49 @@ void cswam::aligner(void *argv){
     bool some_not_null=false; int first_target=0;
     
     for (int j=0;j<srclen;j++){
-        //cout << "src: " << srcdict->decode(srcdata->docword(s,j)) << "\n";
+        cout << "src: " << srcdict->decode(srcdata->docword(s,j)) << "\n";
         
         best_score=-maxfloat;best_i=0;
         
-        for (int i=first_target;i<trglen;i++){
-            //cout << "tgt: " << trgdict->decode(trgdata->docword(s,i)) << " ";
-            
-            for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
-                score=LogGauss(D,
-                               W2V[srcdata->docword(s,j)],
-                               TM[trgdata->docword(s,i)].G[n].M,
-                               TM[trgdata->docword(s,i)].G[n].S)+log(TM[trgdata->docword(s,i)].W[n]);
-                if (n==0) sum=score;
-                else sum=logsum(sum,score);
-            } //completed mixture score
-            
-            if (distortion_var || distortion_mean){
-                if (i>0 ||!use_null_word){
-                    float d=Delta(i,j,trglen,srclen);
-                    sum+=logf(1-NullProb) + LogDistortion(d);
+        for (int i=first_target;i<trglen;i++)
+            if ((use_null_word && i==0) || abs(i-j-1) <= distortion_window){
+                cout << "tgt: " << trgdict->decode(trgdata->docword(s,i)) << " ";
+                
+                for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
+                    score=LogGauss(D,
+                                   W2V[srcdata->docword(s,j)],
+                                   TM[trgdata->docword(s,i)].G[n].M,
+                                   TM[trgdata->docword(s,i)].G[n].S)+log(TM[trgdata->docword(s,i)].W[n]);
+                    if (n==0) sum=score;
+                    else sum=logsum(sum,score);
+                } //completed mixture score
+                
+                if (distortion_var || distortion_mean){
+                    if (i>0 ||!use_null_word){
+                        float d=Delta(i,j,trglen,srclen);
+                        sum+=logf(1-NullProb) + LogDistortion(d);
+                    }
+                    else
+                        if (use_null_word ) sum+=logf(NullProb);
                 }
-                else
-                    if (use_null_word ) sum+=logf(NullProb);
-            }
-            else //use plain distortion model
-                if (i>0){
-                    if (i - (use_null_word?1:0) > j )
-                        sum-=log(i- (use_null_word?1:0) -j);
-                    else if  (i - (use_null_word?1:0) < j )
-                        sum-=log(j - i + (use_null_word?1:0));
+                else //use plain distortion model
+                    if (i>0){
+                        if (i - (use_null_word?1:0) > j )
+                            sum-=(i- (use_null_word?1:0) -j);
+                        else if  (i - (use_null_word?1:0) < j )
+                            sum-=(j - i + (use_null_word?1:0));
+                    }
+                //add distortion score now
+                
+                cout << "score: " << sum << "\n";
+                //  cout << "\t " << srcdict->decode(srcdata->docword(s,j)) << "  " << dist << "\n";
+                //if (dist > -50) score=(float)exp(-dist)/norm;
+                if (sum > best_score){
+                    best_score=sum;
+                    best_i=i;
+                    if ((!use_null_word || best_i>0) && !some_not_null) some_not_null=true;
                 }
-            //add distortion score now
-            
-            //cout << "score: " << sum << "\n";
-            //  cout << "\t " << srcdict->decode(srcdata->docword(s,j)) << "  " << dist << "\n";
-            //if (dist > -50) score=(float)exp(-dist)/norm;
-            if (sum > best_score){
-                best_score=sum;
-                best_i=i;
-                if ((!use_null_word || best_i>0) && !some_not_null) some_not_null=true;
             }
-        }
         //cout << "best_i: " << best_i << "\n";
         
         alignments[s % bucket][j]=best_i;
@@ -1271,18 +1281,20 @@ void cswam::M1_ecounts(void *argv){
     
     ShowProgress(s,srcdata->numdoc());
     
+    float lowprob=0.0000001;
+    
     for (int j=0;j<srclen;j++){
         int f=srcdata->docword(s,j);
         if (srcdict->freq(f)>=minfreq){
             float t=0;
             for (int i=0;i<trglen;i++){
                 int e=trgdata->docword(s,i);
-                if (trgdict->freq(e)>=minfreq)  //&& prob[e][f]>minprob)
+                if (trgdict->freq(e)>=minfreq && (i==0 || abs(i-j-1) <= distortion_window) && prob[e][f]>lowprob)
                     t+=prob[e][f];
             }
             for (int i=0;i<trglen;i++){
                 int e=trgdata->docword(s,i);
-                if (trgdict->freq(e)>=minfreq){ //&& prob[e][f] > minprob){
+                if (trgdict->freq(e)>=minfreq && (i==0 || abs(i-j-1) <= distortion_window) && prob[e][f]>lowprob){
                     pef=prob[e][f]/t;
                     loc_efcounts[b][e][f]+=pef;
                     loc_ecounts[b][e]+=pef;
@@ -1372,7 +1384,7 @@ void cswam::findfriends(FriendList* friends){
     threadpool thpool=thpool_init(threads);
     task *t=new task[trgdict->size()>threads?trgdict->size():threads];
     
-    float minprob=0.000001;
+    float minprob=0.01;
     
     cerr << "initializing M1\n";
     for (int s=0;s<srcdata->numdoc();s++){
@@ -1387,7 +1399,7 @@ void cswam::findfriends(FriendList* friends){
             if (srcdict->freq(f)>=minfreq){
                 for (int i=0;i<trglen;i++){
                     int e=trgdata->docword(s,i);
-                    if (trgdict->freq(e)>=minfreq)
+                    if (trgdict->freq(e)>=minfreq && (i==0 || abs(i-j-1) <= distortion_window))
                         prob[e][f]=1;
                 }
             }
@@ -1439,8 +1451,11 @@ void cswam::findfriends(FriendList* friends){
         float H=0;
         for (auto jtr = prob[e].begin(); jtr !=  prob[e].end();jtr++){
             f.word=(*jtr).first; f.score=(*jtr).second;
-            H-=f.score * logf(f.score);
-            if (f.score > minprob) fv.push_back(f);
+            assert(f.score>=0 && f.score<=1);
+            if (f.score>0)
+                H-=f.score * logf(f.score);
+            if (f.score >= minprob)  //never include options with prob < minprob
+                fv.push_back(f);
         }
         
         std::sort(fv.begin(),fv.end(),myrank);
