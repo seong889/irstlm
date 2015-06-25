@@ -82,8 +82,8 @@ int main(int argc, char **argv){
     double fixnullprob=0;
     bool verbosity=false;
     double minvar=0.2;
-    bool distmean=false;
-    bool distvar=false;
+    bool distmean=true;
+    bool distvar=true;
     bool distbeta=false;
     int  model1iter=7;
     int  distwin=8;
@@ -130,11 +130,11 @@ int main(int argc, char **argv){
                   "NormalizeVectors", CMDBOOLTYPE|CMDMSG, &normvectors, "<bool>: normalize vectors  (default false)",
                   "nv", CMDBOOLTYPE|CMDMSG, &normvectors, "<bool>: normalize vectors  (default false)",
                   
-                  "DistVar", CMDBOOLTYPE|CMDMSG, &distvar, "<bool>: use distortion variance (default false)",
-                  "dv", CMDBOOLTYPE|CMDMSG, &distvar, "<bool>: use distortion variance (default false)",
+                  "DistVar", CMDBOOLTYPE|CMDMSG, &distvar, "<bool>: use distortion variance (default true)",
+                  "dv", CMDBOOLTYPE|CMDMSG, &distvar, "<bool>: use distortion variance (default true)",
 
-                  "DistMean", CMDBOOLTYPE|CMDMSG, &distmean, "<bool>: use distortion mean (default false)",
-                  "dm", CMDBOOLTYPE|CMDMSG, &distmean, "<bool>: use distortion mean (default false)",
+                  "DistMean", CMDBOOLTYPE|CMDMSG, &distmean, "<bool>: use distortion mean (default true)",
+                  "dm", CMDBOOLTYPE|CMDMSG, &distmean, "<bool>: use distortion mean (default true)",
                   
                   "DistBeta", CMDBOOLTYPE|CMDMSG, &distbeta, "<bool>: use beta distribution for distortion (default true)",
                   "db", CMDBOOLTYPE|CMDMSG, &distbeta, "<bool>: use beta distribution for distortion (default true)",
@@ -184,6 +184,7 @@ int main(int argc, char **argv){
           exit_error(IRSTLM_ERROR_DATA,"Use -ForceModel=y option to update an existing model.");
     
     cswam *model=new cswam(srcdatafile,trgdatafile,w2vfile,
+                           forcemodel,
                            usenullword,fixnullprob,
                            normvectors,
                            model1iter,
