@@ -49,6 +49,7 @@ using namespace std;
 #define MY_RAND (((float)random()/RAND_MAX)* 2.0 - 1.0) //random values between -1 and +1
 	
 cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
+             bool forcemodel,
              bool usenull,double fixnullprob,
              bool normvect,
              int model1iter,
@@ -68,6 +69,7 @@ cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
     loc_ecounts=NULL;
     
     //setting
+    incremental_train=forcemodel;
     normalize_vectors=normvect;
     train_variances=trainvar;
     use_null_word=usenull;
@@ -411,6 +413,10 @@ int cswam::loadModel(char* fname,bool expand){
     }
     //replace the trgdict with the model dictionary
     delete trgdict;trgdict=dict;
+    trgdict->encode(trgdict->OOV());           //updated dictionary codes
+    trgBoD = trgdict->encode(trgdict->BoD());  //codes for begin/end sentence markers
+    trgEoD = trgdict->encode(trgdict->EoD());
+    
     
     TM=new TransModel [trgdict->size()];
     
@@ -583,15 +589,17 @@ void cswam::expected_counts(void *argv){
     
     //compute denominator for each source-target pair
     for (int j=0;j<srclen;j++){
-        //global_j=j;
-        //cout << "j: " << srcdict->decode(srcdata->docword(s,j)) << "\n";
+        //qcout << "j: " << srcdict->decode(srcdata->docword(s,j)) << "\n";
         den=0;
         for (int i=0;i<trglen;i++)
             if ((use_null_word && i==0) || abs(i-j-1) <= distortion_window){
                 delta=Delta(i,j,trglen,srclen);
                 for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
+                    if (!(TM[trgdata->docword(s,i)].W[n]>0))
+                        cerr << trgdict->decode(trgdata->docword(s,i)) << " n:" << n << "\n";
                     assert(TM[trgdata->docword(s,i)].W[n]>0); //weight zero must be prevented!!!
                     //global_i=i;
+                    //cout << "i: " << trgdict->decode(trgdata->docword(s,i)) << "\n";
                     A[s][i][n][j]=LogGauss(D, W2V[srcdata->docword(s,j)],
                                            TM[trgdata->docword(s,i)].G[n].M,
                                            TM[trgdata->docword(s,i)].G[n].S)
@@ -877,15 +885,14 @@ void cswam::contraction(void *argv){
 
 int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxiter,int threads){
     
-   
+    //initialize model    
+    initModel(modelfile); //this might change the dictionary!
+    
     //Load training data
 
     srcdata=new doc(srcdict,srctrainfile);
     trgdata=new doc(trgdict,trgtrainfile,use_null_word); //use null word
 
-    //initialize model
-    
-    initModel(modelfile);
    
     iter=0;
     
@@ -984,7 +991,7 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
         }
         cerr << "Num Gaussians: " << ngauss << "\n";
         
-        if (iter > 1){
+        if (iter > 1 || incremental_train ){
             
             freeAlphaDen(); //needs to be reallocated as models might change
             
@@ -1052,13 +1059,13 @@ void cswam::aligner(void *argv){
     bool some_not_null=false; int first_target=0;
     
     for (int j=0;j<srclen;j++){
-        cout << "src: " << srcdict->decode(srcdata->docword(s,j)) << "\n";
+        //cout << "src: " << srcdict->decode(srcdata->docword(s,j)) << "\n";
         
         best_score=-maxfloat;best_i=0;
         
         for (int i=first_target;i<trglen;i++)
             if ((use_null_word && i==0) || abs(i-j-1) <= distortion_window){
-                cout << "tgt: " << trgdict->decode(trgdata->docword(s,i)) << " ";
+                //cout << "tgt: " << trgdict->decode(trgdata->docword(s,i)) << " ";
                 
                 for (int n=0;n<TM[trgdata->docword(s,i)].n;n++){
                     score=LogGauss(D,
@@ -1086,7 +1093,7 @@ void cswam::aligner(void *argv){
                     }
                 //add distortion score now
                 
-                cout << "score: " << sum << "\n";
+                //cout << "score: " << sum << "\n";
                 //  cout << "\t " << srcdict->decode(srcdata->docword(s,j)) << "  " << dist << "\n";
                 //if (dist > -50) score=(float)exp(-dist)/norm;
                 if (sum > best_score){

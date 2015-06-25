@@ -79,6 +79,7 @@ class cswam {
     bool distortion_var;
     bool use_beta_distortion;
     int minfreq;
+    bool incremental_train;
     
     //private info shared among threads
     int trgBoD;        //code of segment begin in target dict
@@ -112,6 +113,7 @@ class cswam {
 public:
     
     cswam(char* srcdatafile,char* trgdatafile, char* word2vecfile,
+          bool forcemodel,
           bool usenull,double fix_null_prob,
           bool normv2w,
           int model1iter,
