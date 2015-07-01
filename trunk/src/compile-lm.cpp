@@ -247,6 +247,7 @@ int main(int argc, char **argv)
         if (debug==1) {
           std::cout << ng.dict->decode(*ng.wordp(1)) << " [" << lmt->maxlevel()-bol << "]" << " ";
           std::cout << std::endl;
+          std::cout.flush();
         }
 
         if ((n % 100000)==0) {
@@ -325,14 +326,17 @@ int main(int argc, char **argv)
           else if (debug==2) {
             std::cout << ng << " [" << ng.size-bol << "-gram]" << " " << Pr;
             std::cout << std::endl;
+            std::cout.flush();
           }
           else if (debug==3) {
             std::cout << ng << " [" << ng.size-bol << "-gram]" << " " << Pr << " bow:" << bow;
             std::cout << std::endl;
+            std::cout.flush();
           }
           else if (debug==4) {
             std::cout << ng << " [" << ng.size-bol << "-gram: recombine:" << statesize << " state:" << (void*) msp << "] [" << ng.size+1-((bol==0)?(1):bol) << "-gram: bol:" << bol << "] " << Pr << " bow:" << bow;
             std::cout << std::endl;
+            std::cout.flush();
           }
           else if (debug>4) {
             std::cout << ng << " [" << ng.size-bol << "-gram: recombine:" << statesize << " state:" << (void*) msp << "] [" << ng.size+1-((bol==0)?(1):bol) << "-gram: bol:" << bol << "] " << Pr << " bow:" << bow;
@@ -349,6 +353,7 @@ int main(int argc, char **argv)
             if ( totp < (1.0 - 1e-5) || totp > (1.0 + 1e-5))
               std::cout << "  [t=" << totp << "] POSSIBLE ERROR";
             std::cout << std::endl;
+            std::cout.flush();
 
             lmt->setlogOOVpenalty((double)oovp);
           }
@@ -374,6 +379,7 @@ int main(int argc, char **argv)
                       << " sent_Nbo=" << sent_Nbo
                       << " sent_Noov=" << sent_Noov
                       << " sent_OOV=" << (float)sent_Noov/sent_Nw * 100.0 << "%" << std::endl;
+            std::cout.flush();
             //reset statistics for sentence based Perplexity
             sent_Nw=sent_Noov=sent_Nbo=0;
             sent_logPr=0.0;
@@ -399,6 +405,7 @@ int main(int argc, char **argv)
                 << " OOV=" << (float)Noov/Nw * 100.0 << "%";
       if (debug) std::cout << " logPr=" <<  logPr;
       std::cout << std::endl;
+      std::cout.flush();
 
       if (debug>1) lmt->used_caches();
 
@@ -419,9 +426,9 @@ int main(int argc, char **argv)
     unsigned int n=0;
 
     std::cout.setf(ios::scientific);
-		std::cout.setf(ios::fixed);
-		std::cout.precision(2);
-		std::cout << "> ";
+    std::cout.setf(ios::fixed);
+    std::cout.precision(2);
+    std::cout << "> ";
 
     lmt->dictionary_incflag(1);
 
@@ -449,6 +456,7 @@ int main(int argc, char **argv)
       std::cout << "> ";
     }
     std::cout << std::endl;
+    std::cout.flush();
     if (debug>1) lmt->used_caches();
 
     if (debug>1) lmt->stat();
@@ -489,6 +497,7 @@ int main(int argc, char **argv)
 #ifndef OUTPUT_SUPPRESSED
 				std::cout << ng << " [" << ng.size-bol << "-gram: recombine:" << statesize << " state:" << (void*) msp << "] [" << ng.size+1-((bol==0)?(1):bol) << "-gram: bol:" << bol << "] " << Pr << " bow:" << bow;
 				std::cout << std::endl;
+    				std::cout.flush();
 #endif
         ng.size=0;
       }
