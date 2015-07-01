@@ -66,8 +66,7 @@ CLEANFILES = $(BUILT_SOURCES)
 
 libirstlm_la_LIBADD = $(BOOST_LDFLAGS) $(BOOST_THREAD_LIB)
 
-#LDADD = -lirstlm 
-LDADD = -lirstlm -lpthread 
+LDADD = -lirstlm -lpthread
 DEPENDENCIES = libirstlm.la
 
 bin_PROGRAMS = dict ngt dtsel compile-lm interpolate-lm prune-lm quantize-lm prune-lm score-lm tlm plsa verify-caching cswa
