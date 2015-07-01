@@ -34,6 +34,7 @@
 #include "cplsa.h"
 
 using namespace std;
+using namespace irstlm;
 
 void print_help(int TypeFlag=0){
     std::cerr << std::endl << "plsa -  probabilistic latent semantic analysis modeling" << std::endl;
@@ -81,7 +82,7 @@ int main(int argc, char **argv){
     char *topicfeaturefile=NULL;
     char *wordfeaturefile=NULL;
     char *modelfile=NULL;
-    char *tmpdir="/tmp";
+    char *tmpdir = getenv("TMP");
     char *txtfile=NULL;
     bool forcemodel=false;
     
