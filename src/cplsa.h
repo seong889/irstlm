@@ -18,6 +18,10 @@
  
  ******************************************************************************/
 
+#ifndef MF_CPLSA_H
+#define MF_CPLSA_H
+
+namespace irstlm {
 
 class plsa {
     dictionary* dict; //dictionary
@@ -77,3 +81,5 @@ public:
     
 };
 
+} //namespace irstlm
+#endif

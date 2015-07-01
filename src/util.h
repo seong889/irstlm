@@ -14,6 +14,9 @@ using namespace std;
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
+//random values between -1 and +1
+#define MY_RAND (((float)random()/RAND_MAX)* 2.0 - 1.0)
+
 #define UNUSED(x) { (void) x; }
 
 #define LMTMAXLEV  20
@@ -41,6 +44,8 @@ using namespace std;
 #define	IRSTLM_ERROR_DATA	4
 #define	IRSTLM_ERROR_MODEL	5
 
+#define BUCKET 10000
+#define SSEED 50
 
 class ngram;
 class mfstream;
