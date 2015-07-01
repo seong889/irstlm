@@ -36,6 +36,8 @@ AC_ARG_ENABLE(interpolatedsearch,
 AC_ARG_ENABLE(optimization,
    [AC_HELP_STRING([--enable-optimization|--disable-optimization], [Enable or Disable (default) optimization info ("-O3")])])
 
+AC_ARG_ENABLE(cxx0,
+   [AC_HELP_STRING([--enable-cxx0|--disable-cxx0], [Enable or Disable (default) c++0x dialect ("-std=c++0x")])])
 
 AC_ARG_WITH(zlib,
             [AC_HELP_STRING([--with-zlib=PATH], [(optional) path to zlib])],
@@ -156,6 +158,15 @@ then
     LDFLAGS="$LDFLAGS -O3"
 else
     AC_MSG_NOTICE([optimization disabled (default)])
+fi
+
+if test "x$enable_cxx0" != 'xno'
+then
+    AC_MSG_NOTICE([c++x0 dialect is enabled (default), compilation with "-DHAVE_CXX0 -std=c++0x "])
+    CPPFLAGS="$CPPFLAGS -DHAVE_CXX0 -std=c++0x";
+else
+    AC_MSG_NOTICE([c++x0 dialect is disabled, compilation without "-std=c++0x" and with "-UHAVE_CXX0"])
+    CPPFLAGS="$CPPFLAGS -UHAVE_CXX0";
 fi
 
 if test "x$with_zlib" != 'xno'
