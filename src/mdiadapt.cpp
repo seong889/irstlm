@@ -1264,13 +1264,13 @@ namespace irstlm {
 			 if (sng.containsWord(subdict->OOV(),1) && !ung.containsWord(dict->OOV(),1))	continue;
 			 */
 			
+			pr=mdiadaptlm::prob(ung,1);			
+
 			if (sng.containsWord(subdict->OOV(),1) || ung.containsWord(dict->OOV(),1)) {
 				_OOV_unigram=true;
 				oovprob+=pr; //accumulate oov probability
 				continue;
 			}
-			
-			pr=mdiadaptlm::prob(ung,1);			
 			pr=(pr?log10(pr):-99);
 			
 			if (i<maxlev)  { //compute back-off
