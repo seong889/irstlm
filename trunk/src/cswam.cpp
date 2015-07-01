@@ -36,18 +36,13 @@
 #include "ngramtable.h"
 #include "doc.h"
 #include <algorithm>
-#include <unordered_map>
 #include <vector>
 #include "cswam.h"
 
-
-#define BUCKET 1000
-#define SSEED 50
-
 using namespace std;
 
-#define MY_RAND (((float)random()/RAND_MAX)* 2.0 - 1.0) //random values between -1 and +1
-	
+namespace irstlm {
+
 cswam::cswam(char* sdfile,char *tdfile, char* w2vfile,
              bool forcemodel,
              bool usenull,double fixnullprob,
@@ -508,10 +503,9 @@ void cswam::freeAlphaDen(){
 }
 
 ///*****
-pthread_mutex_t mut1;
-pthread_mutex_t mut2;
-double LL=0; //Log likelihood
-
+//pthread_mutex_t cswam_mut1;
+//pthread_mutex_t cswam_mut2;
+double cswam_LL=0; //Log likelihood
 
 float logsum(float a,float b){
     if (b<a) return a + logf(1 + expf(b-a));
@@ -905,7 +899,6 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
     
     //support variable to compute likelihood
     localLL=new float[srcdata->numdoc()];
-    float LL;
     
     while (iter < maxiter){
         
@@ -941,17 +934,17 @@ int cswam::train(char *srctrainfile, char*trgtrainfile,char *modelfile, int maxi
         for (int e=0;e<trgdict->size();e++)
             memset(Den[e],0,TM[e].n * sizeof(float));
         
-        LL=0; //compute LL of current model
+        cswam_LL=0; //compute LL of current model
         //compute normalization term for each target word
         for (int s=0;s<srcdata->numdoc();s++){
-            LL+=localLL[s];
+            cswam_LL+=localLL[s];
             for (int i=0;i<trgdata->doclen(s);i++)
                 for (int n=0;n<TM[trgdata->docword(s,i)].n;n++)
                     for (int j=0;j<srcdata->doclen(s);j++)
                         Den[trgdata->docword(s,i)][n]+=A[s][i][n][j];
         }
         
-        cerr << "LL = " << LL << "\n";
+        cerr << "LL = " << cswam_LL << "\n";
         
         
         cerr << "M-step: ";
@@ -1054,7 +1047,7 @@ void cswam::aligner(void *argv){
     assert(trglen<MAX_LINE);
     
     //Viterbi alignment: find the most probable alignment for source
-    float score; float best_score;int best_i;float sum;
+    float score; float best_score;int best_i;float sum=0;
     
     bool some_not_null=false; int first_target=0;
     
@@ -1312,14 +1305,13 @@ void cswam::M1_ecounts(void *argv){
     
 }
 
-
 void cswam::M1_update(void *argv){
     long long e=(long long) argv;
     
     ShowProgress(e,trgdict->size());
     
-    
-    for (auto jtr = efcounts[e].begin(); jtr != efcounts[e].end();jtr++){
+//    for (auto jtr = efcounts[e].begin(); jtr != efcounts[e].end();jtr++){
+    for (src_map::iterator jtr = efcounts[e].begin(); jtr !=  efcounts[e].end();jtr++){
         int f=(*jtr).first;
         prob[e][f]=efcounts[e][f]/ecounts[e];
     }
@@ -1333,7 +1325,8 @@ void cswam::M1_collect(void *argv){
     for (int b=0;b<threads;b++){
         ecounts[e]+=loc_ecounts[b][e];
         loc_ecounts[b][e]=0; //reset local count
-        for (auto jtr = loc_efcounts[b][e].begin(); jtr != loc_efcounts[b][e].end();jtr++){
+//        for (auto jtr = loc_efcounts[b][e].begin(); jtr != loc_efcounts[b][e].end();jtr++){
+        for (src_map::iterator jtr = loc_efcounts[b][e].begin(); jtr !=  loc_efcounts[b][e].end();jtr++){
             int f=(*jtr).first;
             efcounts[e][f]+=loc_efcounts[b][e][f];
         }
@@ -1443,7 +1436,6 @@ void cswam::findfriends(FriendList* friends){
         }
         
         thpool_wait(thpool); //join all threads
-        
     }
     
     cerr << "computing candidates\n";
@@ -1456,7 +1448,8 @@ void cswam::findfriends(FriendList* friends){
         fv.clear();
         //save in a vector and compute entropy
         float H=0;
-        for (auto jtr = prob[e].begin(); jtr !=  prob[e].end();jtr++){
+//        for (auto jtr = prob[e].begin(); jtr !=  prob[e].end();jtr++){
+        for (src_map::iterator jtr = prob[e].begin(); jtr !=  prob[e].end();jtr++){
             f.word=(*jtr).first; f.score=(*jtr).second;
             assert(f.score>=0 && f.score<=1);
             if (f.score>0)
@@ -1470,7 +1463,8 @@ void cswam::findfriends(FriendList* friends){
 
         cout << trgdict->decode(e) << " # friends: " << fv.size() << " PP " << PP << endl;
                int count=0;
-        for (auto jtr = fv.begin(); jtr !=  fv.end();jtr++){
+//        for (auto jtr = fv.begin(); jtr !=  fv.end();jtr++){
+        for (FriendList::iterator jtr = fv.begin(); jtr !=  fv.end();jtr++){
             friends[e].push_back(*jtr);
             //if (verbosity)
             cout << trgdict->decode(e) << " " << srcdict->decode((*jtr).word) << " " << (*jtr).score << endl;
@@ -1484,10 +1478,7 @@ void cswam::findfriends(FriendList* friends){
     M1_clearcounts(true);
     
     delete [] prob;
-    
-    
 }
 
-
-
+} //namespace irstlm
 

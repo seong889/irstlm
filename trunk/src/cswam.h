@@ -20,8 +20,15 @@
 #ifndef MF_CSWAM_H
 #define MF_CSWAM_H
 
+#ifdef HAVE_CXX0
 #include <unordered_map>
+#else
+#include <map>
+#endif
+
 #include <vector>
+
+namespace irstlm {
 
 typedef struct{
     
@@ -45,7 +52,11 @@ typedef struct{
 } Friend;
 
 typedef std::vector<Friend> FriendList; //list of word Friends
+#ifdef HAVE_CXX0
 typedef std::unordered_map<int,float> src_map; //target to source associative memory
+#else
+typedef std::map<int,float> src_map; //target to source associative memory
+#endif
 
 class cswam {
     
@@ -204,5 +215,5 @@ public:
     int test(char *srctestfile, char* trgtestfile, char* modelfile,char* alignmentfile, int threads=1);
     
 };
-
+} //namespace irstlm
 #endif

@@ -35,12 +35,10 @@
 #include "doc.h"
 #include "cplsa.h"
 
-#define BUCKET 10000
-
 using namespace std;
 
-#define MY_RAND (((float)random()/RAND_MAX)* 2.0 - 1.0)
-	
+namespace irstlm {
+
 plsa::plsa(dictionary* d,int top,char* wd,int th,bool mm){
     
     dict=d;
@@ -356,9 +354,9 @@ int plsa::saveWordFeatures(char* fname,long long d){
 }
 
 ///*****
-pthread_mutex_t mut1;
-pthread_mutex_t mut2;
-double LL=0; //Log likelihood
+pthread_mutex_t cplsa_mut1;
+pthread_mutex_t cplsa_mut2;
+double cplsa_LL=0; //Log likelihood
 const float topicthreshold=0.00001;
 const float deltathreshold=0.0001;
 
@@ -401,14 +399,14 @@ void plsa::expected_counts(void *argv){
             for (int i=0; i<m; i++)
                 lT[i * r + t]=(W[trset->docword(d,i)][t] * H[d * r + t]/WH[i]);
 
-    //UPDATE GLOBAL T and LL
-    pthread_mutex_lock(&mut1);
+    //UPDATE GLOBAL T and cplsa_LL
+    pthread_mutex_lock(&cplsa_mut1);
     for (int i=0; i<m; i++){
         for (int t=0; t<r; t++)
                 T[trset->docword(d,i)][t]+=(double)lT[i * r + t];
-        LL+= log( WH[i] );
+        cplsa_LL+= log( WH[i] );
     }
-    pthread_mutex_unlock(&mut1);
+    pthread_mutex_unlock(&cplsa_mut1);
 
 
     //UPDATE Haj (topic a and document j)
@@ -461,11 +459,11 @@ int plsa::train(char *trainfile, char *modelfile, int maxiter,float noiseW,int s
     threadpool thpool=thpool_init(threads);
     task *t=new task[trset->numdoc()];
     
-    pthread_mutex_init(&mut1, NULL);
-    //pthread_mutex_init(&mut2, NULL);
+    pthread_mutex_init(&cplsa_mut1, NULL);
+    //pthread_mutex_init(&cplsa_mut2, NULL);
     
     while (iter < maxiter){
-        LL=0;
+        cplsa_LL=0;
         
         cerr << "Iteration: " << ++iter << " ";
         
@@ -489,7 +487,7 @@ int plsa::train(char *trainfile, char *modelfile, int maxiter,float noiseW,int s
         }
         
         
-        cerr << " LL: " << LL << "\n";
+        cerr << " LL: " << cplsa_LL << "\n";
         if (trset->numdoc()> 10) system("date");
         
         saveW(modelfile);
@@ -507,7 +505,6 @@ int plsa::train(char *trainfile, char *modelfile, int maxiter,float noiseW,int s
     
     return 1;
 }
-
 
 
 void plsa::single_inference(void *argv){
@@ -531,7 +528,6 @@ void plsa::single_inference(void *argv){
     
     int iter=0;
     
-    double LL=0;
     float delta=0;
     float maxdelta=1;
     
@@ -642,4 +638,4 @@ int plsa::inference(char *testfile, char* modelfile, int maxit, char* topicfeatf
     delete trset;
     return 1;
 }
-
+} //namespace irstlm
