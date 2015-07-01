@@ -317,10 +317,10 @@ void exit_error(int err, const std::string &msg){
 #undef MY_ASSERT(x)
 #define MY_ASSERT(x) do { assert(x); } while (0)
 #else
-#define MY_ASSERT(x) {}
+#define MY_ASSERT(x) { UNUSED(x); }
 #endif
 #else
-#define MY_ASSERT(x) {}
+#define MY_ASSERT(x) { UNUSED(x); }
 #endif
 */
 
@@ -334,7 +334,7 @@ void exit_error(int err, const std::string &msg){
 #ifdef MY_ASSERT_FLAG
 void MY_ASSERT(bool x) { assert(x); }
 #else
-void MY_ASSERT(bool x) { }
+void MY_ASSERT(bool x) { UNUSED(x); }
 #endif
 
 

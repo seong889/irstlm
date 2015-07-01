@@ -34,6 +34,7 @@
 #include "cswam.h"
 
 using namespace std;
+using namespace irstlm;
 
 void print_help(int TypeFlag=0){
     std::cerr << std::endl << "cswa -  continuous space word alignment model" << std::endl;
@@ -48,6 +49,8 @@ void print_help(int TypeFlag=0){
     std::cerr << "       Hint: (echo `wc -l < yourfile`; add-start-end.sh -s \"d\" < yourfile) > yourfile.doc " << std::endl;
     
     std::cerr << std::endl;
+
+    FullPrintParams(TypeFlag, 0, 1, stderr);
 }
 
 void usage(const char *msg = 0)
@@ -75,7 +78,6 @@ int main(int argc, char **argv){
     int iterations=0;       //number of EM iterations to run
     int threads=1;          //current EM iteration for multi-thread training
     bool help=false;
-    int prunethreshold=3;
     bool trainvar=true;
     bool normvectors=false;
     bool usenullword=true;
@@ -191,8 +193,6 @@ int main(int argc, char **argv){
                            trainvar,minvar,
                            distwin,distbeta, distmean,distvar,
                            verbosity);
-    
-    ngramtable* friends;
     
     if (iterations)
         model->train(srcdatafile,trgdatafile,modelfile,iterations,threads);
